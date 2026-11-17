@@ -4,7 +4,7 @@
 import * as THREE from '../vendor/three.module.js';
 import { WALLS, PROPS, DOORS, LIGHTS, zoneAt } from './level.js';
 import { ZONES, COLORS, VISION } from './config.js';
-import { clamp, segBox } from './mathx.js';
+import { clamp, segBox, normAngle } from './mathx.js';
 import { signalOrigin } from './cyber.js';
 import { createMaterialLibrary } from './render/mats.js';
 import { createHumanoidRig, createBotRig } from './render/rigs.js';
@@ -266,11 +266,13 @@ export class View {
     this.trimMesh.renderOrder = 1;
     this.scene.add(this.trimMesh);
 
-    // Puertas con caché de carteles por texto + marcos candidatos a fusión estática
+    // Puertas con carteles fusionados por texto + marcos candidatos a fusión estática
     const doorTexCache = new Map();
+    const doorSignBuckets = new Map();
     const staticRoots = [];
-    const signGeo = new THREE.PlaneGeometry(2.2, 0.55);
-    this.ownedGeos.push(signGeo);
+    if (this.lightFixtures) {
+      for (const lf of this.lightFixtures) staticRoots.push(lf.coneObj.group);
+    }
 
     for (const d of DOORS) {
       let sMat = doorTexCache.get(d.label);
@@ -280,20 +282,23 @@ export class View {
         this.ownedTextures.push(tex);
         this.ownedMats.push(sMat);
         doorTexCache.set(d.label, sMat);
+        doorSignBuckets.set(d.label, []);
       }
+      const bucket = doorSignBuckets.get(d.label);
+      const m1 = new THREE.Matrix4().makeRotationY(d.rot).setPosition(d.x, 0, d.z);
+      const s1 = new THREE.PlaneGeometry(2.2, 0.55);
+      s1.translate(0, 2.55, 0.25);
+      s1.applyMatrix4(m1);
+      bucket.push(s1);
+      const s2 = new THREE.PlaneGeometry(2.2, 0.55);
+      s2.rotateY(Math.PI);
+      s2.translate(0, 2.55, -0.25);
+      s2.applyMatrix4(m1);
+      bucket.push(s2);
+
       const g = new THREE.Group();
       g.position.set(d.x, 0, d.z);
       g.rotation.y = d.rot;
-
-      const sign1 = new THREE.Mesh(signGeo, sMat);
-      sign1.position.set(0, 2.55, 0.25);
-      sign1.userData.dynamic = true;
-      g.add(sign1);
-      const sign2 = new THREE.Mesh(signGeo, sMat);
-      sign2.position.set(0, 2.55, -0.25);
-      sign2.rotation.y = Math.PI;
-      sign2.userData.dynamic = true;
-      g.add(sign2);
 
       const pL = new THREE.Mesh(new THREE.BoxGeometry(0.10, 2.35, 0.50), this.matLib.paintedMetal);
       pL.position.set(-1.15, 1.175, 0);
@@ -306,6 +311,12 @@ export class View {
 
       this.scene.add(g);
       staticRoots.push(g);
+    }
+    for (const [label, geos] of doorSignBuckets) {
+      const mergedSign = mergeBufferGeometries(geos);
+      for (const sg of geos) sg.dispose();
+      this.ownedGeos.push(mergedSign);
+      this.scene.add(new THREE.Mesh(mergedSign, doorTexCache.get(label)));
     }
 
     this.propRefs = { ownedMaterials: [] };
@@ -406,7 +417,12 @@ export class View {
     this.scene.add(this.playerChar.group);
 
     for (const n of this.sim.npcs) {
-      const c = createHumanoidRig(n.outfit, false, this.matLib);
+      const c = createHumanoidRig(n.outfit, false, this.matLib, {
+        id: n.id,
+        role: n.role,
+        target: !!n.target,
+        enforcerFor: n.enforcerFor || null,
+      });
       this.scene.add(c.group);
       this.chars.set(n.id, c);
       const cone = coneMesh(VISION.range, VISION.fov, COLORS.cyan);
@@ -491,11 +507,12 @@ export class View {
       if (nextCam) cm.c = nextCam;
     }
     this.playerChar.applyOutfit(sim.player.outfit, true);
-    this.playerChar.outfitId = sim.player.outfit;
+    this.playerChar.resetPose();
     for (const n of sim.npcs) {
       const c = this.chars.get(n.id);
       if (c) {
         c.applyOutfit(n.outfit, false);
+        c.resetPose();
         c._stripped = false;
         c.setInstinctHighlight(0x000000, 0x000000);
         c.group.visible = true;
@@ -635,17 +652,20 @@ export class View {
 
   updateLightPool(sim, focusX, focusZ) {
     for (const lf of this.lightFixtures) {
-      const off = sim.blackout > 0 && lf.zone === 'hall';
-      lf.flicker = off ? (Math.sin(this.time * 31 + lf.def.x) > 0.88 ? 0.35 : 0.02) : 1;
-      lf.coneObj.setFactor(lf.flicker * (this.instinct ? 0.55 : 1));
       const dx = lf.def.x - focusX, dz = lf.def.z - focusZ;
       lf.score = dx * dx + dz * dz;
+      const off = sim.blackout > 0 && lf.zone === 'hall';
+      lf.flicker = off ? (Math.sin(this.time * 31 + lf.def.x) > 0.88 ? 0.35 : 0.02) : 1;
     }
     const sorted = this.lightFixtures.slice().sort((a, b) => a.score - b.score);
+    const activeLimit = this.quality === 'low' ? 4 : this.lightPool.length;
+    for (let i = 0; i < sorted.length; i++) {
+      sorted[i].coneObj.setFactor(i < activeLimit ? sorted[i].flicker * (this.instinct ? 0.55 : 1) : 0);
+    }
     const instScale = this.instinct ? 0.75 : 1;
     for (let i = 0; i < this.lightPool.length; i++) {
       const pl = this.lightPool[i];
-      const item = this.quality === 'low' && i >= 4 ? null : sorted[i];
+      const item = i >= activeLimit ? null : sorted[i];
       if (!item) {
         pl.intensity = 0;
         continue;
@@ -719,13 +739,27 @@ export class View {
       c.group.position.set(n.x, 0, n.z);
       c.group.rotation.y = n.yaw;
       const stateColor = n.state === 'combat' ? COLORS.red : n.awareness > 0.4 ? COLORS.amber : COLORS.cyan;
-      c.pose(n, t, { channel: n.state === 'grabbed' });
+      let lookYaw = 0;
+      if (n.state === 'suspicious') {
+        lookYaw = clamp(normAngle(Math.atan2(p.x - n.x, p.z - n.z) - n.yaw), -0.62, 0.62);
+      } else if (n.state === 'investigate' && (n.goal || n.lookAt)) {
+        const tgt = n.goal || n.lookAt;
+        lookYaw = clamp(normAngle(Math.atan2(tgt.x - n.x, tgt.z - n.z) - n.yaw), -0.62, 0.62);
+      } else if (n.lookTimer > 0 && n.lookAt && (n.state === 'patrol' || n.state === 'idle')) {
+        lookYaw = clamp(normAngle(Math.atan2(n.lookAt.x - n.x, n.lookAt.z - n.z) - n.yaw), -0.62, 0.62);
+      }
+      c.pose(n, t, { channel: n.state === 'grabbed', lookYaw });
+      const distSq = (n.x - focus.x) ** 2 + (n.z - focus.z) ** 2;
+      c.parts.torso.castShadow = distSq < 320;
       const cone = this.cones.get(n.id);
-      cone.visible = this.instinct;
-      cone.position.set(n.x, 0.06, n.z);
-      cone.rotation.y = n.yaw;
-      cone.material.color.setHex(stateColor);
-      cone.material.opacity = n.state === 'combat' ? 0.22 : 0.13;
+      const showCone = this.instinct && distSq < 290;
+      cone.visible = showCone;
+      if (showCone) {
+        cone.position.set(n.x, 0.06, n.z);
+        cone.rotation.y = n.yaw;
+        cone.material.color.setHex(stateColor);
+        cone.material.opacity = n.state === 'combat' ? 0.22 : 0.13;
+      }
 
       c.setInstinctHighlight(
         this.instinct ? (n.target ? 0x6b5210 : 0x11333a) : 0x000000,
@@ -761,16 +795,20 @@ export class View {
     // Marcadores 3D de interactuables (medidos desde el emisor activo)
     for (const m of this.itMarkers) {
       const d = Math.hypot(m.it.x - focus.x, m.it.z - focus.z);
-      const show = !m.it.taken && (this.instinct || d < 5.5);
+      const show = !m.it.taken && (this.instinct ? d < 16 : d < 5.5);
       m.group.visible = show;
       if (show) {
         m.icon.lookAt(this.camera.position);
         m.icon.position.y = 1.4 + Math.sin(t * 2 + m.it.x) * 0.08;
-        const near = d < 2.6;
-        m.ring.material.opacity = near ? 0.95 : 0.4;
-        m.ring.scale.setScalar(near ? 1.15 + Math.sin(t * 5) * 0.06 : 1);
-        if (m.it.type === 'poison' && m.it.poisoned) m.ring.material.color.setHex(0x7dffb0);
-        if (m.it.type === 'container') m.ring.material.color.setHex(m.it.stored.length >= m.it.cap ? COLORS.red : COLORS.cyan);
+        const showRing = d < 9.5;
+        m.ring.visible = showRing;
+        if (showRing) {
+          const near = d < 2.6;
+          m.ring.material.opacity = near ? 0.95 : 0.4;
+          m.ring.scale.setScalar(near ? 1.15 + Math.sin(t * 5) * 0.06 : 1);
+          if (m.it.type === 'poison' && m.it.poisoned) m.ring.material.color.setHex(0x7dffb0);
+          if (m.it.type === 'container') m.ring.material.color.setHex(m.it.stored.length >= m.it.cap ? COLORS.red : COLORS.cyan);
+        }
       }
     }
 

@@ -283,7 +283,8 @@ export function createMaterialLibrary(renderer, quality = 'high') {
     const leatherSet = sets.leather_upholstery;
 
     const cloth = new THREE.MeshStandardMaterial({
-      color: 0x222833,
+      color: 0xffffff,
+      vertexColors: true,
       map: suitSet.map,
       aoMap: suitSet.ormMap,
       aoMapIntensity: 0.72,
@@ -294,19 +295,10 @@ export function createMaterialLibrary(renderer, quality = 'high') {
       metalness: 0.05,
       envMapIntensity: 0.68,
     });
-    const accent = new THREE.MeshStandardMaterial({
-      color: 0x8899aa,
-      map: suitSet.map,
-      aoMap: suitSet.ormMap,
-      aoMapIntensity: 0.6,
-      normalMap: suitSet.normalMap,
-      normalScale: new THREE.Vector2(0.45, 0.45),
-      roughness: 0.58,
-      metalness: 0.16,
-      envMapIntensity: 0.82,
-    });
+    const accent = cloth;
     const skin = new THREE.MeshStandardMaterial({
-      color: isAndroid ? 0xcfd8e2 : 0xd7b49a,
+      color: isAndroid ? 0xcfd8e2 : 0xffffff,
+      vertexColors: !isAndroid,
       aoMap: isAndroid ? steelSet.ormMap : leatherSet.ormMap,
       aoMapIntensity: isAndroid ? 0.65 : 0.35,
       roughnessMap: isAndroid ? steelSet.ormMap : null,
@@ -326,16 +318,18 @@ export function createMaterialLibrary(renderer, quality = 'high') {
       roughness: 0.85,
       metalness: 0.18,
     });
+    const hairMat = skin;
     const visor = new THREE.MeshBasicMaterial({
       color: new THREE.Color(COLORS.cyan).multiplyScalar(1.8),
       toneMapped: false,
     });
-    const owned = [cloth, accent, skin, vestMat, visor];
+    const owned = [cloth, skin, vestMat, visor];
     return {
       cloth,
       accent,
       skin,
       vestMat,
+      hairMat,
       visor,
       dispose() {
         for (const m of owned) m.dispose();

@@ -49,15 +49,18 @@ export function mergeBufferGeometries(geos) {
     totalVerts += count;
   }
 
+  const hasColor = converted.some((g) => !!g.attributes.color);
   const posOut = new Float32Array(totalVerts * 3);
   const nrmOut = new Float32Array(totalVerts * 3);
   const uvOut = new Float32Array(totalVerts * 2);
+  const colOut = hasColor ? new Float32Array(totalVerts * 3) : null;
   let vOffset = 0;
 
   for (const g of converted) {
     const p = g.attributes.position;
     const n = g.attributes.normal;
     const u = g.attributes.uv;
+    const c = g.attributes.color;
     for (let i = 0; i < p.count; i++) {
       const i3 = (vOffset + i) * 3;
       const i2 = (vOffset + i) * 2;
@@ -69,6 +72,11 @@ export function mergeBufferGeometries(geos) {
       nrmOut[i3 + 2] = n.getZ(i);
       uvOut[i2] = u.getX(i);
       uvOut[i2 + 1] = u.getY(i);
+      if (colOut) {
+        colOut[i3] = c ? c.getX(i) : 1;
+        colOut[i3 + 1] = c ? c.getY(i) : 1;
+        colOut[i3 + 2] = c ? c.getZ(i) : 1;
+      }
     }
     vOffset += p.count;
     g.dispose();
@@ -78,6 +86,7 @@ export function mergeBufferGeometries(geos) {
   merged.setAttribute('position', new THREE.BufferAttribute(posOut, 3));
   merged.setAttribute('normal', new THREE.BufferAttribute(nrmOut, 3));
   merged.setAttribute('uv', new THREE.BufferAttribute(uvOut, 2));
+  if (colOut) merged.setAttribute('color', new THREE.BufferAttribute(colOut, 3));
   merged.computeBoundingSphere();
   return merged;
 }
@@ -175,9 +184,8 @@ const CONE_FRAG = /* glsl */ `
 export function buildLightCone(light, matLib) {
   const group = new THREE.Group();
   group.position.set(light.x, light.y, light.z);
-  group.userData.dynamic = true;
 
-  // Luminaria de techo
+  // Luminaria de techo (candidata a fusión estática)
   const housing = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.28, 0.09, 14), matLib.darkMetal);
   housing.castShadow = false;
   group.add(housing);
@@ -188,6 +196,7 @@ export function buildLightCone(light, matLib) {
   });
   const bulb = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 0.03, 12), bulbMat);
   bulb.position.y = -0.04;
+  bulb.userData.dynamic = true;
   group.add(bulb);
 
   const coneH = Math.max(1.8, light.y - 0.1);
@@ -209,6 +218,7 @@ export function buildLightCone(light, matLib) {
   const cone = new THREE.Mesh(coneGeo, coneMat);
   cone.position.y = -coneH * 0.5 - 0.03;
   cone.renderOrder = 3;
+  cone.userData.dynamic = true;
   group.add(cone);
 
   return {
@@ -220,7 +230,7 @@ export function buildLightCone(light, matLib) {
       bulb.visible = f > 0.02;
     },
     dispose() {
-      housing.geometry.dispose();
+      if (housing.parent) housing.geometry.dispose();
       bulb.geometry.dispose();
       bulbMat.dispose();
       coneGeo.dispose();
@@ -529,10 +539,13 @@ export function buildPropMesh(p, matLib, refs = {}) {
       break;
     }
     case 'pool': {
-      g.userData.dynamic = true;
-      const water = new THREE.Mesh(scaleGeometryUVs(new THREE.PlaneGeometry(w - 0.4, d - 0.4), 3, 2), M.water);
+      const poolMat = M.water.clone();
+      refs.ownedMaterials = refs.ownedMaterials || [];
+      refs.ownedMaterials.push(poolMat);
+      const water = new THREE.Mesh(scaleGeometryUVs(new THREE.PlaneGeometry(w - 0.4, d - 0.4), 3, 2), poolMat);
       water.rotation.x = -Math.PI / 2;
       water.position.y = 0.09;
+      water.userData.dynamic = true;
       g.add(water);
       refs.poolWater = water;
       g.add(mBox(w, 0.3, 0.32, M.ceramic, 0, 0.15, -d / 2));

@@ -426,3 +426,121 @@ test('MaterialCraft ported operators (mcLevels, HBAO, Sobel, Edge-Wear) bake val
     assert.ok(nzMin >= 140, `Archetype ${kind} normal Z ${nzMin} inverted or corrupted`);
   }
 });
+
+test('rigs.js enforces shadow-caster discipline, VIP/enforcer silhouettes, and contextual FK/IK poses', async () => {
+  const THREE = await import('../vendor/three.module.js');
+  const { createHumanoidRig, createBotRig, solveTwoBoneIK } = await import('../src/render/rigs.js');
+
+  const mkMat = () => new THREE.MeshStandardMaterial();
+  const mockMatLib = {
+    darkMetal: mkMat(),
+    brushedSteel: mkMat(),
+    paintedMetal: mkMat(),
+    gold: mkMat(),
+    white: mkMat(),
+    glowCyan: new THREE.MeshBasicMaterial(),
+    glowGreen: new THREE.MeshBasicMaterial(),
+    makeCharacterMaterials(isAndroid = false) {
+      const cloth = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true });
+      const skin = new THREE.MeshStandardMaterial({ color: isAndroid ? 0xcfd8e2 : 0xffffff, vertexColors: !isAndroid });
+      const vestMat = mkMat();
+      const visor = new THREE.MeshBasicMaterial();
+      const owned = [cloth, skin, vestMat, visor];
+      return {
+        cloth,
+        accent: cloth,
+        skin,
+        vestMat,
+        hairMat: skin,
+        visor,
+        dispose() { for (const m of owned) m.dispose(); },
+      };
+    },
+  };
+
+  function countShadowCasters(root) {
+    let n = 0;
+    root.traverse((o) => { if (o.isMesh && o.castShadow) n++; });
+    return n;
+  }
+
+  // 1. S-7 Android rig
+  const s7 = createHumanoidRig('suit', true, mockMatLib);
+  assert.equal(countShadowCasters(s7.group), 3, 'Humanoid rig must keep <= 3 shadow-casting meshes');
+  assert.equal(s7.parts.visor.visible, true);
+  assert.equal(s7.parts.hair.visible, false);
+
+  // 2. Marcus Vandermeer VIP rig & speech vs patrol guard
+  const vandermeer = createHumanoidRig('vip', false, mockMatLib, { id: 'vandermeer', role: 'vip', target: true });
+  assert.equal(countShadowCasters(vandermeer.group), 1);
+  assert.equal(vandermeer.profile.hairStyle, 'executive');
+  assert.equal(vandermeer.accessories.vipTailcoat.visible, true);
+  assert.equal(vandermeer.accessories.vipRegalia.visible, true);
+
+  vandermeer.pose({ moving: 0, state: 'idle', act: 'speech', anim: 0 }, 1.2, { snap: true });
+  assert.ok(vandermeer.parts.armR.rotation.x < -0.45, 'Speech pose must raise orator arm');
+  // When patrolling with stale npc.act, locomotion must override idle speech gesture
+  vandermeer.pose({ moving: 1.5, state: 'patrol', act: 'speech', anim: 0 }, 2.0, { snap: true });
+  assert.ok(Math.abs(vandermeer.parts.legL.rotation.x) > 0.01 || Math.abs(vandermeer.parts.kneeL.rotation.x) > 0.08);
+
+  // 3. Dra. Elena Kessler AR visor, lab coat, datapad in 'work', and strip/restore lifecycle
+  const kessler = createHumanoidRig('scientist', false, mockMatLib, { id: 'kessler', role: 'scientist', target: true, female: true });
+  assert.equal(countShadowCasters(kessler.group), 1);
+  assert.equal(kessler.profile.hairStyle, 'bun');
+  assert.equal(kessler.accessories.kesslerVisor.visible, true);
+  assert.equal(kessler.accessories.kesslerCollar.visible, true);
+  kessler.pose({ moving: 0, state: 'idle', act: 'work', anim: 0 }, 1.0, { snap: true });
+  assert.ok(kessler.parts.head.rotation.x > 0.18, 'Work pose must tilt head toward datapad');
+
+  const origTorsoR = kessler.parts.torso.geometry.attributes.color.getX(0);
+  kessler.setStripped(true);
+  assert.equal(kessler.accessories.kesslerVisor.visible, false);
+  assert.equal(kessler.accessories.coat.visible, false);
+  const strippedTorsoR = kessler.parts.torso.geometry.attributes.color.getX(0);
+  assert.notEqual(strippedTorsoR, origTorsoR, 'setStripped(true) must re-tint vertex color slice');
+  kessler.setStripped(false);
+  assert.equal(kessler.parts.torso.geometry.attributes.color.getX(0), origTorsoR, 'setStripped(false) must restore vertex color slice');
+  assert.equal(kessler.accessories.kesslerVisor.visible, true);
+  assert.equal(kessler.accessories.coat.visible, true);
+
+  // 4. Security Chief enforcer combat sidearm, prone cleanup & resetPose snap
+  const chief = createHumanoidRig('guard', false, mockMatLib, { id: 'chief', role: 'guard', enforcerFor: 'guard' });
+  assert.equal(chief.accessories.enforcerTorso.visible, true);
+  chief.pose({ moving: 0, state: 'combat', anim: 0 }, 1.0, { snap: true });
+  assert.ok(chief.parts.armR.rotation.x < -1.25, 'Combat pose must adopt two-handed pistol aim');
+  chief.pose({ moving: 0, anim: 0 }, 1.5, { sleep: true });
+  assert.equal(chief.parts.hips.position.y, 0.20);
+  chief.resetPose();
+  chief.pose({ moving: 0, state: 'idle', anim: 0 }, 1.5 + 1 / 60);
+  assert.ok(chief.parts.hips.position.y > 0.90, 'resetPose must snap resurrected NPC upright on next frame');
+
+  // 5. Waiter tray dynamic visibility & outfitId live getter
+  s7.applyOutfit('waiter', true);
+  assert.equal(s7.outfitId, 'waiter');
+  s7.pose({ moving: 1.5, anim: 0 }, 2.0, { snap: true });
+  assert.equal(s7.accessories.tray.visible, true);
+  s7.pose({ moving: 0, anim: 0 }, 2.1, { aiming: true });
+  assert.equal(s7.accessories.tray.visible, false, 'Serving tray must hide while aiming/jackedIn/dragging');
+  s7.pose({ moving: 0, anim: 0 }, 2.2, {});
+  assert.equal(s7.accessories.tray.visible, true);
+  s7.setInstinctHighlight(0x6b5210, 0x7a5c14);
+  s7.setVisorColor(0xd8b45c);
+  assert.equal(mockMatLib.gold.color.getHex(), 0xffffff, 'Shared matLib materials must never be mutated');
+  assert.equal(mockMatLib.white.emissive.getHex(), 0x000000, 'Shared matLib materials must never be mutated');
+
+  // 6. Quadruped bot rigs & 2-bone IK solver bounds
+  const botMaint = createBotRig('maint', mockMatLib);
+  const botSec = createBotRig('sec', mockMatLib);
+  assert.equal(countShadowCasters(botMaint.group), 1);
+  assert.equal(countShadowCasters(botSec.group), 1);
+  botSec.pose({ moving: 3.2, anim: 0.4 }, 1.5, { hijacked: true, disabled: false });
+  const ikOut = solveTwoBoneIK(0.22, 0.24, 0.9, 0.9);
+  assert.equal(Number.isFinite(ikOut.hipRotX) && Number.isFinite(ikOut.kneeRotX), true);
+
+  s7.dispose();
+  vandermeer.dispose();
+  kessler.dispose();
+  chief.dispose();
+  botMaint.dispose();
+  botSec.dispose();
+});

@@ -2,7 +2,7 @@
 // Arnés bajo demanda para exposición visual (?show=...) y benchmark (?bench=1)
 // ---------------------------------------------------------------------------
 import * as THREE from '../vendor/three.module.js';
-import { OUTFITS } from './config.js';
+import { COLORS } from './config.js';
 import { createHumanoidRig, createBotRig } from './render/rigs.js';
 import { buildPropMesh, scaleGeometryUVs } from './render/props.js';
 
@@ -67,6 +67,7 @@ function runShowcase(mode, quality, canvas, View) {
         normalMap: s.normalMap,
         envMapIntensity: 1.2,
       });
+      view.ownedMats.push(mat);
       const sphere = new THREE.Mesh(new THREE.SphereGeometry(0.62, 32, 24), mat);
       sphere.position.set(col * 2.2, 0.85, row * 2.2);
       sphere.castShadow = true;
@@ -77,39 +78,56 @@ function runShowcase(mode, quality, canvas, View) {
       scene.add(ped);
     });
   } else if (mode === 'rigs') {
-    const outfitKeys = Object.keys(OUTFITS);
-    const s7 = createHumanoidRig('suit', true, matLib);
-    s7.group.position.set(-4.4, 0, 0.8);
-    s7.setHeld('pistol', false);
-    scene.add(s7.group);
-    animatedRigs.push({ rig: s7, speed: 0, opts: { aiming: true } });
-
-    const s7Jack = createHumanoidRig('tech', true, matLib);
-    s7Jack.group.position.set(-4.4, 0, -1.4);
-    scene.add(s7Jack.group);
-    animatedRigs.push({ rig: s7Jack, speed: 0, opts: { jackedIn: true } });
-
-    outfitKeys.forEach((ok, idx) => {
-      const rig = createHumanoidRig(ok, false, matLib);
-      const col = idx - 3;
-      rig.group.position.set(col * 1.25 + 0.8, 0, idx % 2 === 0 ? 0.6 : -0.8);
+    const frontRow = [
+      { outfit: 'suit', player: true, profile: {}, held: 'pistol', speed: 0, opts: { aiming: true } },
+      { outfit: 'tech', player: true, profile: {}, held: null, speed: 0, opts: { jackedIn: true } },
+      { outfit: 'vip', player: false, profile: { id: 'vandermeer', role: 'vip', target: true }, speed: 0, opts: { state: 'idle', act: 'speech' } },
+      { outfit: 'scientist', player: false, profile: { id: 'kessler', role: 'scientist', target: true, female: true }, speed: 0, opts: { state: 'idle', act: 'work' } },
+      { outfit: 'guard', player: false, profile: { id: 'chief', role: 'guard', enforcerFor: 'guard' }, speed: 0, opts: { state: 'combat' } },
+      { outfit: 'cook', player: false, profile: { id: 'chef', role: 'cook', enforcerFor: 'cook' }, speed: 0, opts: { state: 'idle', act: 'work' } },
+    ];
+    frontRow.forEach((spec, idx) => {
+      const rig = createHumanoidRig(spec.outfit, spec.player, matLib, spec.profile);
+      rig.group.position.set((idx - 2.5) * 1.32, 0, 1.05);
+      if (spec.held) rig.setHeld(spec.held, false);
+      if (spec.opts.jackedIn) rig.setVisorColor(COLORS.gold);
       scene.add(rig.group);
-      animatedRigs.push({ rig, speed: idx % 2 === 0 ? 2.4 : 0, opts: {}, anim: idx * 0.9 });
+      view.chars.set(`front_${idx}`, rig);
+      animatedRigs.push({ rig, speed: spec.speed, opts: spec.opts, anim: idx * 0.7 });
+    });
+
+    const backRow = [
+      { outfit: 'scientist', profile: { id: 'sci_senior', enforcerFor: 'scientist', female: true }, speed: 0, opts: { state: 'idle', act: 'drink:coffee' } },
+      { outfit: 'suit', profile: { id: 'guest1', female: true }, speed: 2.1, opts: { state: 'patrol' } },
+      { outfit: 'suit', profile: { id: 'guest3', female: true }, speed: 0, opts: { state: 'idle', act: 'drink:wine' } },
+      { outfit: 'waiter', profile: { id: 'waiter2', female: true }, speed: 2.2, opts: { state: 'patrol' } },
+      { outfit: 'guard', profile: { id: 'guard_hall' }, speed: 2.5, opts: { state: 'patrol' } },
+      { outfit: 'tech', profile: { id: 'tech1' }, speed: 0, opts: { state: 'sick' } },
+    ];
+    backRow.forEach((spec, idx) => {
+      const rig = createHumanoidRig(spec.outfit, false, matLib, spec.profile);
+      rig.group.position.set((idx - 2.5) * 1.32, 0, -1.05);
+      scene.add(rig.group);
+      view.chars.set(`back_${idx}`, rig);
+      animatedRigs.push({ rig, speed: spec.speed, opts: spec.opts, anim: idx * 1.1 });
     });
   } else if (mode === 'units') {
     const b1 = createBotRig('maint', matLib);
     b1.group.position.set(-1.3, 0, 0);
     scene.add(b1.group);
+    view.unitRigs.set('b1', b1);
     animatedBots.push({ rig: b1, moving: 3.0, hijacked: false, disabled: false, anim: 0 });
 
     const b2 = createBotRig('sec', matLib);
     b2.group.position.set(0.2, 0, 0);
     scene.add(b2.group);
+    view.unitRigs.set('b2', b2);
     animatedBots.push({ rig: b2, moving: 3.4, hijacked: true, disabled: false, anim: 1.5 });
 
     const b3 = createBotRig('sec', matLib);
     b3.group.position.set(1.7, 0, 0);
     scene.add(b3.group);
+    view.unitRigs.set('b3', b3);
     animatedBots.push({ rig: b3, moving: 0, hijacked: false, disabled: true, anim: 0 });
   } else {
     // mode === 'props'
@@ -124,6 +142,7 @@ function runShowcase(mode, quality, canvas, View) {
       { kind: 'chandelier', x: 0, y: 3.2, z: 0, r: 1.3 },
     ];
     const refs = {};
+    view.propRefs = refs;
     for (const sp of sampleProps) scene.add(buildPropMesh(sp, matLib, refs));
   }
 
@@ -177,6 +196,7 @@ function runShowcase(mode, quality, canvas, View) {
       drawCalls: view.renderer.info.render.calls,
       shaderErrors: view.shaderErrors.slice(),
     };
+    document.documentElement.dataset.showReport = JSON.stringify(window.__showReport);
   }
   requestAnimationFrame(loop);
   window.__game = { view, diag: () => view.getDiagnostics() };
@@ -288,6 +308,7 @@ function runBenchmark(durationSec, quality, canvas, createSim, stepSim, View, UI
           texturesAfter: after.textures,
           texturesDelta: after.textures - before.textures,
         };
+        document.documentElement.dataset.benchReport = JSON.stringify(window.__benchReport);
         return;
       }
     }
