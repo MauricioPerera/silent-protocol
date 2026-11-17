@@ -2,7 +2,7 @@
 
 ## System Overview
 
-**SILENT PROTOCOL — Unidad S-7** (`silence`) is a zero-build, zero-external-asset 3D social-stealth and cyber-infiltration web game built with ES modules, bundled Three.js `r160` (`./vendor/three.module.js`), procedural WebGL2 PBR + HDR Bloom rendering, HTML5 HUD overlays, WebAudio synthesis, and a hardened Node.js static HTTP server (`./server.mjs`). Players control infiltration android S-7 inside Mansion Aurora to eliminate two high-value targets (Marcus Vandermeer and Dr. Elena Kessler), exfiltrate the Aurora data core, and extract by boat — combining Hitman-style disguises, environmental accidents, poison, and rear takedowns with Watch Dogs-style RF-attenuated remote hacking, CCTV camera network hopping, quadruped bot hijacking through low vents, and active security signal tracing.
+**SILENT PROTOCOL — Unidad S-7** (`silence`) is a zero-build, zero-external-asset 3D social-stealth and cyber-infiltration web game built with ES modules, bundled Three.js `r160` (`./vendor/three.module.js`), procedural WebGL2 PBR (`1024x1024` progressive Web Worker node-graph textures adapted from `storytold/materialcraft`) + HDR Bloom rendering, articulated FK/IK character and robotic rigs with distinct VIP/enforcer silhouettes, HTML5 HUD overlays, WebAudio synthesis, and a hardened Node.js static HTTP server (`./server.mjs`). Players control infiltration android S-7 inside Mansion Aurora to eliminate two high-value targets (Marcus Vandermeer and Dr. Elena Kessler), exfiltrate the Aurora data core, and extract by boat — combining Hitman-style disguises, environmental accidents, poison, and rear takedowns with Watch Dogs-style RF-attenuated remote hacking, CCTV camera network hopping, quadruped bot hijacking through low vents, and active security signal tracing.
 
 - **Play online (GitHub Pages)**: https://mauricioperera.github.io/silent-protocol/
 - **Run locally**: `npm start` (`node server.mjs`) and open `http://127.0.0.1:8080`.
@@ -14,7 +14,7 @@ flowchart LR
   Main -.->|"?show / ?bench"| Diag["src/diag.js (Showcases & GPU Benchmark)"]
   Main -->|"Fixed dt=1/60s"| Sim["src/sim.js + cyber.js + npc.js + entities.js + nav.js"]
   Main -->|"render(sim, dt, input)"| Render["src/render.js (View Orchestrator)"]
-  Render --> RenderSub["src/render/* (mats.js, rigs.js, props.js, postfx.js)"]
+  Render --> RenderSub["src/render/* (mats_ops.js, mats_worker.js, mats.js, rigs.js, props.js, postfx.js)"]
   Main -->|"update(dt) + onEvent / onSelect"| UI["src/ui.js (DOM + Dual-Locus Minimap)"]
   Main -->|"init / play / setMuted"| Audio["src/audio.js (WebAudio Synth)"]
   Sim -->|"World, Link & Trace State"| Render

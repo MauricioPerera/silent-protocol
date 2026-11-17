@@ -39,6 +39,7 @@ jobs:
         run: |
           mkdir -p _site/src/render _site/vendor
           cp index.html _site/index.html
+          cp THIRD_PARTY_NOTICES.md _site/THIRD_PARTY_NOTICES.md
           touch _site/.nojekyll
           cp src/*.js _site/src/
           cp src/render/*.js _site/src/render/
