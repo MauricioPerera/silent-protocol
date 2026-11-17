@@ -14,7 +14,7 @@ Domain mechanics implemented across `src`:
 
 ## Subdirectories
 
-- render: [./render/README.md](./render/README.md) - Procedural CPU `DataTexture` PBR materials + `PMREM` environment, articulated FK/IK character and bot rigs, beveled/lathed Mansion Aurora props + static mesh batching, and `HalfFloatType` MSAA `4x` Bloom + `AgX` post-processing.
+- render: [./render/README.md](./render/README.md) - Procedural `DataTexture` PBR materials (MaterialCraft-adapted TypedArray operators + non-blocking `1024x1024` Web Worker upgrade) + `PMREM` environment, articulated FK/IK character and bot rigs, beveled/lathed Mansion Aurora props + static mesh batching, and `HalfFloatType` MSAA `4x` Bloom + `AgX` post-processing.
 
 ## Interface
 
@@ -52,7 +52,7 @@ Domain mechanics implemented across `src`:
 
 ## Invariants
 
-- **Strict Headless & Presentation DAG**: All 17 modules under `src/` form a strict acyclic import graph; headless modules (`config.js`, `mathx.js`, `level.js`, `nav.js`, `entities.js`, `npc.js`, `cyber.js`, `sim.js`) never reference `window`, `document`, `THREE`, or `./render/*`.
+- **Strict Headless & Presentation DAG**: All 19 modules under `src/` form a strict acyclic import graph; headless modules (`config.js`, `mathx.js`, `level.js`, `nav.js`, `entities.js`, `npc.js`, `cyber.js`, `sim.js`) never reference `window`, `document`, `THREE`, or `./render/*`.
 - **Seeded Determinism**: Passing `{ seed }` to `createSim({ seed })` routes all simulation randomness through `sim.rng` backed by enumerable `sim.rngState`, producing `assert.deepStrictEqual`-identical state graphs across runs.
 - **GPU Draw-Call & Shader Stability**: `View` sets `renderer.info.autoReset = false` (resetting once per frame), batches static opaque geometry via `mergeStaticMeshes`, keeps all `8` `PointLight` instances `visible = true` (avoiding `NUM_POINT_LIGHTS` shader recompilations), precompiles `wallOpaque`/`wallXray` against `postfx.compile()`, and maintains `maxDrawCalls <= 350` with `0` shader errors and `0` geometry/texture leaks across `attachSim()` restarts.
 

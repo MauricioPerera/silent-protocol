@@ -41,7 +41,7 @@ flowchart LR
 - src: [./src/README.md](./src/README.md) - Core 2D XZ stealth & cyber simulation (`sim.js`, `cyber.js`, `npc.js`, `entities.js`, `nav.js`, `level.js`, `config.js`, `mathx.js`), Three.js WebGL2 orchestrator (`render.js` + [./src/render/README.md](./src/render/README.md)), on-demand diagnostic harness (`diag.js`), DOM/minimap HUD controller (`ui.js`), and WebAudio synth (`audio.js`).
 - docs: Design specifications (`./docs/designs/silent_protocol_2_pbr_cyber.md`).
 - tests: Automated `node:test` + `node:assert/strict` verification suites (`./tests/sim.test.mjs` and `./tests/cyber_and_dag.test.mjs`).
-- vendor: Vendored third-party Three.js `r160` ES module bundle (`./vendor/three.module.js`, excluded from first-party source contracts).
+- vendor: Vendored third-party Three.js `r160` ES module bundle (`./vendor/three.module.js`, excluded from first-party source contracts; see [./THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)).
 
 ## Global Invariants
 

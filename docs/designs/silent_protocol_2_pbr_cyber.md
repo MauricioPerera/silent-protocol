@@ -27,7 +27,7 @@ La solución mantiene plana la capa de simulación *headless* en `src/` (incorpo
 
 ## Goals
 
-*   **Cero activos externos:** Generar el 100 % de mallas, texturas PBR (`Albedo`, `ORM`, `Normal` a `512x512`, `<= 40 MB` de VRAM en texturas), entorno `PMREM`, efectos visuales y síntesis WebAudio ([src/audio.js](../../src/audio.js)) por código.
+*   **Cero activos externos:** Generar el 100 % de mallas, texturas PBR (`Albedo`, `ORM`, `Normal` mediante grafo de operadores `TypedArray` en `mats_ops.js` con arranque instantáneo `256x256` y mejora asíncrona en `Web Worker` a `1024x1024` en `high` y `512x512` en `medium`), entorno `PMREM`, efectos visuales y síntesis WebAudio ([src/audio.js](../../src/audio.js)) por código.
 *   **Presupuesto de rendimiento verificable:** Mantener `<= 8` `PointLight` con intensidad activa simultáneamente, `<= 350` *draw calls* totales por fotograma (midiendo sombras + escena + postprocesado con `renderer.info.autoReset = false`), cero recompilaciones de shaders tras el arranque, y verificar tiempos de fotograma `p50`/`p95`/`p99` mediante `?bench=1`.
 *   **Rigs articulados y arquitectura fusionada:** Sustituir las cajas rígidas de humanos y S-7 por jerarquías articuladas (`<= 14` mallas por humanoide, proyectando sombra únicamente en tronco y muslos) e incorporar unidades robóticas terrestres con IK analítico de 2 huesos, verificables de forma aislada con `?show=mats|rigs|props|units`.
 *   **Hackeo por proximidad sin romper el sigilo social:** Integrar el hackeo al apuntar dentro del modo Instinto (`V`/`Tab`) consumiendo energía de Instinto, con alcance efectivo desde el emisor RF activo atenuado por cada tabique físico cruzado (`alcanceEfectivo = alcanceBase - murosCruzados * 3.5 m`).
@@ -95,7 +95,7 @@ flowchart TD
   end
 
   subgraph ClientBrowser["Capa 2: Presentación WebGL2 / DOM / WebAudio"]
-    MATS["src/render/mats.js (Texturas PBR DataTexture + PMREM)"]
+    MATS["src/render/mats*.js (Operadores MaterialCraft + Worker PBR + PMREM)"]
     RIGS["src/render/rigs.js (Humanos FK + Bots IK 2-huesos)"]
     PROPS["src/render/props.js (Mobiliario, Luces Volumétricas y Fusión Estática)"]
     POST["src/render/postfx.js (FBO HalfFloat MSAA 4x + Bloom + AgX)"]
@@ -150,9 +150,9 @@ flowchart TD
 
 ### 4. Pipeline Gráfico WebGL2 / Three.js `r160` (`src/render/`)
 
-*   **Síntesis PBR Determinista en CPU (`mats.js`)**: Genera una sola vez en el arranque (`< 50 ms`) **9 sets de texturas PBR inmutables** (`Albedo` sRGB, `ORM` lineal para `aoMap`/`roughnessMap`/`metalnessMap`, y `Normal`) mediante `DataTexture` a `512x512` en calidades `high`/`medium` y `256x256` en `low` (`<= 40 MB` de VRAM total con mipmaps nativos). Los suelos y muros escalan las coordenadas `uv` de su geometría según sus dimensiones reales sin mutar `repeat` en las texturas compartidas.
+*   **Motor PBR Nodal con Mejora Asíncrona en Web Worker (`mats_ops.js`, `mats_worker.js`, `mats.js`)**: Sintetiza en arranque **9 sets de texturas PBR periódicas** (`Albedo` sRGB, `ORM` lineal con `HBAO + Roughness + Metalness`, y `Normal` Sobel invariante a resolución) mediante operadores `TypedArray` adaptados de `storytold/materialcraft` bajo licencia `MIT` (`Levels`, `Directional Warp`, `Slope Warp`, `Directional Blur`, `Voronoi F1/F2`, `HBAO` de 8 direcciones y desgaste/suciedad por curvatura): arranca síncronamente a `256x256` en el primer fotograma y actualiza en caliente vía `Transferable` `ArrayBuffer` desde `mats_worker.js` a `1024x1024` (`high`) o `512x512` (`medium`) con anisotropía hardware `<= 8`. Los suelos y muros escalan las coordenadas `uv` de su geometría según sus dimensiones reales sin mutar `repeat` en las texturas compartidas.
 *   **Entorno `PMREM` y Pool Fijo de `8` `PointLight`**: `PMREMGenerator` captura un mapa de entorno nocturno/interior asignado a `scene.environment`. Las `16` lámparas de [src/level.js](../../src/level.js) conservan apliques emisivos y conos volumétricos aditivos, mientras un *pool* espacial mantiene exactamente `8` `PointLight` (`7` ambientales + `muzzleLight`) permanentemente con `visible = true` (anulando las inactivas con `intensity = 0`) y precompila en arranque `wallOpaque` y `wallXray` mediante `renderer.compile` para eliminar el 100 % de recompilaciones de shaders en juego.
-*   **Post-FX HDR con MSAA Hardware (`postfx.js`)**: En `high`/`medium` (cuando WebGL2 expone `EXT_color_buffer_float` o `EXT_color_buffer_half_float`), renderiza la escena a un `WebGLRenderTarget` `HalfFloatType` con `samples: 4` (sin `DepthTexture`, evitando conflictos con muros translúcidos en modo Instinto), extrae una pirámide Bloom de 4 niveles y compone a pantalla aplicando una única vez `THREE.AgXToneMapping` y conversión a sRGB. En `low`, renderiza directamente al `<canvas>` con `THREE.AgXToneMapping`.
+*   **Post-FX HDR con MSAA Hardware (`postfx.js`)**: En `high`/`medium` (cuando WebGL2 expone `EXT_color_buffer_float` o `EXT_color_buffer_half_float`), renderiza la escena a un `WebGLRenderTarget` `HalfFloatType` con `samples: 4` en `high` y `2` en `medium` (sin `DepthTexture`, evitando conflictos con muros translúcidos en modo Instinto), extrae una pirámide Bloom (`4` niveles en `high`, `3` en `medium`) y compone a pantalla aplicando una única vez `THREE.AgXToneMapping` y conversión a sRGB. En `low`, renderiza directamente al `<canvas>` con `THREE.AgXToneMapping`.
 *   **Rigs Articulados con Materiales por Instancia y Fusión Estática (`rigs.js`, `props.js`)**: `rigs.js` construye humanoides articulados FK e instancia materiales `MeshStandardMaterial` ligeros propios por personaje referenciando las texturas inmutables de `mats.js`, de modo que los cambios de disfraz, cuerpos despojados y resaltes emisivos en Instinto nunca se contaminen entre NPCs, limitando `castShadow = true` a tronco y muslos (`3` mallas por humanoide). `props.js` integra `mergeStaticMeshes` para fusionar mobiliario estático, `WALLS` (`1` malla con material conmutable `wallOpaque`/`wallXray` + `1` malla `trim`), marcos de `DOORS` y sub-piezas rígidas de `chandelier`, manteniendo el total real de *draw calls* `<= 350`.
 
 ### 5. Interfaz Cibernética, Audio Tipado y Diagnóstico Perezoso
@@ -169,11 +169,11 @@ flowchart TD
 *   **Cons**: Requiere añadir cargadores fuera de [vendor/three.module.js](../../vendor/three.module.js), gestionar carga asíncrona de binarios, almacenar activos externos y adaptar los 7 disfraces dinámicos sobre esqueletos importados.
 *   **Reason for Rejection**: Contradice la restricción arquitectónica de cero activos externos (*zero-asset procedural architecture*) del proyecto.
 
-### Alternative B: Síntesis PBR con `WebGLMultipleRenderTargets` + Post-FX con `DepthTexture` GTAO y `FXAA`/`CAS`
+### Alternative B: Retener `WebGLMultipleRenderTargets` Vivos + Post-FX con `DepthTexture` GTAO y `FXAA`/`CAS`
 
-*   **Pros**: Ejecuta la generación inicial de texturas y la oclusión ambiental en GPU.
-*   **Cons**: En Three.js `r160` ([vendor/three.module.js](../../vendor/three.module.js)), invocar `dispose()` sobre `WebGLMultipleRenderTargets` elimina sus `WebGLTexture` en GPU y obliga a mantener un segundo generador CPU para el modo `low`. Por otro lado, combinar `samples > 0` con `DepthTexture` lanza `GL_INVALID_OPERATION` en WebGL2, los muros translúcidos del modo Instinto (`depthWrite = false`) producen artefactos de GTAO, y forzar `samples: 0` exige escribir shaders manuales `FXAA` y `CAS` (*Contrast Adaptive Sharpening*).
-*   **Reason for Rejection**: Un único generador determinista `DataTexture` en CPU (`< 50 ms`) elimina la duplicación GPU/CPU y los fallos de ciclo de vida FBO, y usar `samples: 4` sin `DepthTexture` con `THREE.AgXToneMapping` nativo ofrece antialiasing geométrico real con menos código GLSL.
+*   **Pros**: Evita volcar píxeles a `DataTexture` y ejecuta oclusión ambiental en espacio de pantalla.
+*   **Cons**: En Three.js `r160` ([vendor/three.module.js](../../vendor/three.module.js)), retener `mrt.texture[i]` directamente como mapa de escena falla al liberar el contenedor `WebGLMultipleRenderTargets` y presenta limitaciones con mipmaps/anisotropía. Por otro lado, combinar `samples > 0` con `DepthTexture` lanza `GL_INVALID_OPERATION` en WebGL2, los muros translúcidos del modo Instinto (`depthWrite = false`) producen artefactos de GTAO, y forzar `samples: 0` exige escribir shaders manuales `FXAA` y `CAS`.
+*   **Reason for Rejection**: Evaluar los operadores nodales en `TypedArray` puros (`mats_ops.js`) arrancando síncronamente a `256x256` y cocinando `1024x1024` / `512x512` sin bloqueos en `mats_worker.js` (`Transferable` `ArrayBuffer` -> `DataTexture` con anisotropía `8x`) elimina el 100 % de los riesgos de FBO/`MRT` y permite pruebas deterministas en Node.js (`npm test`), mientras `samples: 4` sin `DepthTexture` con `THREE.AgXToneMapping` nativo ofrece antialiasing geométrico real con menos código GLSL.
 
 ### Alternative C: Drones Voladores de Vuelo Libre en 3D
 
@@ -210,7 +210,7 @@ flowchart TD
     *   Tiempo de fotograma objetivo en preset `high` (`1080p`, `DPR <= 1.6`, GPU integrada/dedicada de gama media): `p50 <= 12 ms`, `p95 <= 16.6 ms`, `p99 <= 24 ms`, medido con `?bench=1`.
     *   Techo duro de *draw calls* (`renderer.info.render.calls` con `autoReset = false`): `<= 350` llamadas por fotograma sumando sombras, escena y postprocesado.
     *   Techo de luces puntuales en escena: exactamente `8` `THREE.PointLight` preasignadas (`7` del *pool* espacial + `muzzleLight`), conmutadas solo por `intensity`.
-    *   Huella de VRAM en texturas procedurales PBR: `<= 40 MB` (`9` sets `512x512` `Albedo + ORM + Normal` con mipmaps; `256x256` en `low`), con tiempo de síntesis inicial `< 150 ms`.
+    *   Huella de VRAM en texturas procedurales PBR (`9` sets `Albedo + ORM + Normal` con cadena completa de mipmaps): `~9 MiB` en el fotograma inicial (`256x256`) y en `low`, escalando asíncronamente en segundo plano a `~36 MiB` en `medium` (`512x512`) y `~144 MiB` en `high` (`1024x1024`) sin bloquear el hilo principal.
 *   **Determinism & Testability**:
     *   Cero referencias a `window`, `document`, `WebGLRenderingContext` o `THREE` en los módulos *headless* ([src/config.js](../../src/config.js), [src/mathx.js](../../src/mathx.js), [src/level.js](../../src/level.js), [src/nav.js](../../src/nav.js), [src/entities.js](../../src/entities.js), [src/npc.js](../../src/npc.js), `src/cyber.js`, [src/sim.js](../../src/sim.js)), verificado mediante test estático de importaciones.
     *   Igualdad estructural determinista (`assert.deepStrictEqual`) entre dos ejecuciones con la misma semilla `createSim({ seed })`.
@@ -242,7 +242,7 @@ El plan se ejecuta en **4 fases incrementales**, dejando el repositorio estable 
 
 1.  **Fase 1 — Núcleo Headless Determinista y Red Cibernética**: Tareas `1` a `8`, `18` y `19`.
     *   *Checkpoint*: `npm test` en verde (`0` fallos en `tests/sim.test.mjs` y `tests/cyber_and_dag.test.mjs`) y `node --check` limpio sobre todos los módulos *headless*.
-2.  **Fase 2 — Materiales PBR CPU, Entorno `PMREM`, Post-FX HDR y Diagnóstico `?show=mats`**: Tareas `9`, `12` y soporte base en `13`, `17` y `20`.
+2.  **Fase 2 — Motor PBR Nodal (`MaterialCraft` + Web Worker), Entorno `PMREM`, Post-FX HDR y Diagnóstico `?show=mats`**: Tareas `9`, `12` y soporte base en `13`, `17` y `20`.
     *   *Checkpoint*: `node --check` limpio y carga de `http://127.0.0.1:8080/?show=mats` con `diag.shaderErrors.length === 0 && diag.sceneMeshes > 0`.
 3.  **Fase 3 — Rigs Articulados FK/IK, Mobiliario + Fusión Estática y Orquestador `View`**: Tareas `10`, `11` y `13` completa.
     *   *Checkpoint*: Inspección en navegador de `?show=rigs`, `?show=props` y `?show=units` con `diag.shaderErrors.length === 0` y `maxDrawCalls <= 350`.
@@ -353,11 +353,11 @@ El plan se ejecuta en **4 fases incrementales**, dejando el repositorio estable 
     *   En `stepSim(sim, dt, input)`: si `sim.link.mode !== 's7'`, mantener `p.moving = 0`, `p.jackedIn = true`, omitir el movimiento humano y omitir tanto el drenaje `13/s` como la recarga `+7/s` de Instinto; ejecutar `stepCyber(sim, dt, input)`; en el bucle de `sim.cams`, saltar cámaras con `sim.time < (c.loopedUntil || 0)` o controladas activamente (`sim.link.mode === 'camera' && sim.link.targetId === c.id`), y añadir `if (p.jackedIn) illegal = true;`.
     *   Añadir códigos `sfx` explícitos (`'poison'`, `'spark'`, `'coin'`, `'crash'`, `'kill'`) en las llamadas `pushEvent` correspondientes de `sim.js`. Reexportar `signalOrigin`, `effectiveHackRange`, `getCyberPrompt`, `executeCyberAction`, `cycleCameraLink` y `disconnectLink`.
 
-#### 9. `src/render/mats.js` (`Create`)
+#### 9. `src/render/mats_ops.js`, `src/render/mats_worker.js` y `src/render/mats.js` (`Create`)
 
-*   **Type / Scope**: Generador determinista de texturas PBR en CPU e iluminación `PMREM` (`Three.js r160`).
-*   **Rationale**: Producir mapas `Albedo`, `ORM` y `Normal` con mipmaps nativos y cero FBOs temporales, compartiendo texturas inmutables sin contaminar estados de materiales por personaje.
-*   **Proposed Changes**: Exportar `createMaterialLibrary(renderer, quality)` que genera con PRNG fijo 9 sets de texturas `DataTexture` (`wood_parquet`, `ceramic_tile`, `concrete_service`, `plaster_wall`, `brushed_steel`, `painted_metal`, `fabric_suit`, `leather_upholstery`, `turf_garden` a `512x512` en `'high'`/`'medium'` y `256x256` en `'low'`, `RepeatWrapping`, `repeat = (1, 1)`, `generateMipmaps = true`), materiales arquitectónicos compartidos (`wallOpaque`, `wallXray`, `trimOpaque`, `trimXray`, `glass`, `water`, `gold`, `darkMetal`, `brushedSteel`, `wood`, `leather`, `white`, `green`, emisivos), un helper `makeCharacterMaterials()` que crea instancias `MeshStandardMaterial` propias para un personaje enlazadas a las texturas compartidas `fabric_suit`/`brushed_steel`, el entorno `PMREMGenerator` asignable a `scene.environment`, y `dispose()`.
+*   **Type / Scope**: Motor procedural PBR de operadores nodales (`MaterialCraft` `MIT`), `Web Worker` asíncrono e iluminación `PMREM` (`Three.js r160`).
+*   **Rationale**: Producir mapas `Albedo`, `ORM` (`HBAO + Roughness + Metalness`) y `Normal` Sobel verificables en Node.js con arranque instantáneo (`256x256`) y mejora sin tirones a `1024x1024` / `512x512`, compartiendo texturas entre la escena sin contaminar materiales por personaje.
+*   **Proposed Changes**: Exportar en `mats_ops.js` `ARCHETYPES`, `mcLevels`, `createBakeScratch` y `bakeArchetypeBuffers`; ejecutar el cocinado en segundo plano en `mats_worker.js` transfiriendo `ArrayBuffer`s sin copia; y exportar en `mats.js` `createMaterialLibrary(renderer, quality)` con `RepeatWrapping`, `generateMipmaps = true`, `anisotropy <= 8`, `sharedSet`, `makeZoneFloorMaterial(zone)`, `makeCharacterMaterials(isPlayer)`, `setQuality(nextQuality)`, `envMap` (`PMREMGenerator`) y `dispose()`.
 
 #### 10. `src/render/rigs.js` (`Create`)
 
@@ -455,8 +455,8 @@ El plan se ejecuta en **4 fases incrementales**, dejando el repositorio estable 
 
 ### Verification Plan
 
-*   **Unit & Headless Integration Tests**: Ejecutar `npm test` (`node --test tests/sim.test.mjs tests/cyber_and_dag.test.mjs`) exigiendo `0` fallos en las 9 pruebas de sigilo base y las 7 suites cibernéticas/DAG.
-*   **Static Syntax Validation**: Validar sintaxis ES Module con `node --check` sobre los `20` módulos propios `.js`/`.mjs` del proyecto (`server.mjs`, `src/*.js`, `src/render/*.js`, `tests/*.mjs`, excluyendo `vendor/three.module.js`).
+*   **Unit & Headless Integration Tests**: Ejecutar `npm test` (`node --test tests/sim.test.mjs tests/cyber_and_dag.test.mjs`) exigiendo `0` fallos en las 9 pruebas de sigilo base y las 8 suites cibernéticas/DAG/PBR.
+*   **Static Syntax Validation**: Validar sintaxis ES Module con `node --check` sobre los `22` módulos propios `.js`/`.mjs` del proyecto (`server.mjs`, `src/*.js`, `src/render/*.js`, `tests/*.mjs`, excluyendo `vendor/three.module.js`).
 *   **Visual Showcase Inspection**: Verificar en el navegador integrado `http://127.0.0.1:8080/?show=mats`, `?show=rigs`, `?show=props` y `?show=units` comprobando en cada uno `window.__showReport.shaderErrors.length === 0 && window.__showReport.sceneMeshes > 0`.
 *   **Automated GPU & Memory Benchmark**: Ejecutar `http://127.0.0.1:8080/?bench=1&duration=10` verificando `window.__benchReport.done === true`, `shaderErrors.length === 0`, `maxDrawCalls <= 350`, `activeLights <= 8`, `geometriesDelta === 0` y `texturesDelta === 0`.
 

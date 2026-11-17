@@ -18,7 +18,8 @@ if (params.has('show') || params.has('bench')) {
 
 function bootGame() {
   let sim = createSim();
-  const view = new View(canvas, sim);
+  const initialQuality = $('qualitySel') ? $('qualitySel').value : 'high';
+  const view = new View(canvas, sim, { quality: initialQuality });
   const ui = new UI(sim, view);
   const audio = new Audio();
 

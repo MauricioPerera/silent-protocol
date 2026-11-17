@@ -58,6 +58,8 @@ test('headless modules enforce strict acyclic DAG and zero DOM/WebGL/THREE coupl
 
   const allSrcFiles = [
     ...headlessFiles,
+    'src/render/mats_ops.js',
+    'src/render/mats_worker.js',
     'src/render/mats.js',
     'src/render/props.js',
     'src/render/postfx.js',
@@ -390,4 +392,37 @@ test('signal trace lifecycle: activation, clean evasion with hysteresis, search 
   advance(simKillChief, 0.2);
   assert.equal(simKillChief.trace.active, false, 'Neutralizing security chief must abort active trace');
   assert.equal(simKillChief.alarm, ALERT.CALM);
+});
+
+test('MaterialCraft ported operators (mcLevels, HBAO, Sobel, Edge-Wear) bake valid non-black periodic PBR maps', async () => {
+  const { ARCHETYPES, mcLevels, createBakeScratch, bakeArchetypeBuffers } = await import('../src/render/mats_ops.js');
+
+  // Exact numerical parity with MaterialCraft crates/nodes/src/atomic/levels.rs unit tests
+  assert.ok(Math.abs(mcLevels(0.4, 0.2, 0.5, 0.6, 0.0, 1.0) - 0.5) < 1e-5);
+  assert.ok(Math.abs(mcLevels(0.25, 0.0, 0.25, 1.0, 0.0, 1.0) - 0.7578583) < 1e-5);
+  assert.equal(mcLevels(0.0, 0.0, 0.25, 1.0, 0.0, 1.0), 0.0);
+  assert.equal(Number.isFinite(mcLevels(Number.NaN, 0.0, 0.5, 1.0, 0.0, 1.0)), true);
+
+  const sz = 128;
+  const sc = createBakeScratch(sz);
+  for (const kind of ARCHETYPES) {
+    const { albedoBuf, ormBuf, normalBuf } = bakeArchetypeBuffers(kind, sz, sc);
+    assert.equal(albedoBuf.length, sz * sz * 4);
+    let lumSum = 0, aoMin = 255, aoMax = 0, nzMin = 255;
+    const n = sz * sz;
+    for (let i = 0; i < n; i++) {
+      const o = i * 4;
+      lumSum += albedoBuf[o] + albedoBuf[o + 1] + albedoBuf[o + 2];
+      if (ormBuf[o] < aoMin) aoMin = ormBuf[o];
+      if (ormBuf[o] > aoMax) aoMax = ormBuf[o];
+      if (normalBuf[o + 2] < nzMin) nzMin = normalBuf[o + 2];
+      assert.equal(albedoBuf[o + 3], 255);
+      assert.equal(ormBuf[o + 3], 255);
+      assert.equal(normalBuf[o + 3], 255);
+    }
+    const meanChannel = lumSum / (n * 3);
+    assert.ok(meanChannel > 35 && meanChannel < 225, `Archetype ${kind} albedo mean ${meanChannel} out of realistic PBR range`);
+    assert.ok(aoMin < 195 && aoMax > 240, `Archetype ${kind} HBAO range [${aoMin}, ${aoMax}] lacks cavity contrast`);
+    assert.ok(nzMin >= 140, `Archetype ${kind} normal Z ${nzMin} inverted or corrupted`);
+  }
 });

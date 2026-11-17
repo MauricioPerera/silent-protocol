@@ -171,6 +171,7 @@ export function createPostFX(renderer, width = 1280, height = 720, quality = 'hi
   let sceneRT = null;
   let downRTs = [];
   let upRTs = [];
+  let lastAllocKey = '';
 
   function freeTargets() {
     if (sceneRT) { sceneRT.dispose(); sceneRT = null; }
@@ -178,17 +179,23 @@ export function createPostFX(renderer, width = 1280, height = 720, quality = 'hi
     for (const rt of upRTs) rt.dispose();
     downRTs = [];
     upRTs = [];
+    lastAllocKey = '';
   }
 
   function allocateTargets() {
-    freeTargets();
-    enabled = hdrCapable && curQuality !== 'low';
-    if (!enabled) return;
-
+    const nextEnabled = hdrCapable && curQuality !== 'low';
     const dpr = renderer.getPixelRatio();
     const pw = Math.max(4, Math.floor(curW * dpr));
     const ph = Math.max(4, Math.floor(curH * dpr));
     const samples = renderer.capabilities.isWebGL2 ? (curQuality === 'high' ? 4 : 2) : 0;
+    const levels = curQuality === 'high' ? 4 : 3;
+    const key = nextEnabled ? `1_${pw}_${ph}_${samples}_${levels}` : '0';
+    if (key === lastAllocKey) return;
+
+    freeTargets();
+    enabled = nextEnabled;
+    lastAllocKey = key;
+    if (!enabled) return;
 
     sceneRT = new THREE.WebGLRenderTarget(pw, ph, {
       type: THREE.HalfFloatType,
@@ -201,7 +208,6 @@ export function createPostFX(renderer, width = 1280, height = 720, quality = 'hi
 
     let mw = Math.max(2, pw >> 1);
     let mh = Math.max(2, ph >> 1);
-    const levels = curQuality === 'high' ? 4 : 3;
     for (let i = 0; i < levels; i++) {
       downRTs.push(new THREE.WebGLRenderTarget(mw, mh, {
         type: THREE.HalfFloatType,

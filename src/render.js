@@ -506,6 +506,8 @@ export class View {
   }
 
   setQuality(q) {
+    const prevShadows = this.renderer.shadowMap.enabled;
+    const prevPostfx = this.postfx.enabled;
     this.quality = q;
     const dpr = devicePixelRatio || 1;
     if (q === 'high') {
@@ -519,12 +521,16 @@ export class View {
       this.renderer.shadowMap.enabled = false;
     }
     if (this.moon) this.moon.castShadow = q !== 'low';
+    this.matLib.setQuality(q);
     const w = Math.max(2, this.canvas.clientWidth || innerWidth || 1280);
     const h = Math.max(2, this.canvas.clientHeight || innerHeight || 720);
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.postfx.setQuality(q, w, h);
+    if (!this.showcaseMode && this.wallMesh && (prevShadows !== this.renderer.shadowMap.enabled || prevPostfx !== this.postfx.enabled)) {
+      this.precompileShaders();
+    }
   }
 
   resize() {
