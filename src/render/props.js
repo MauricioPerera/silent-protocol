@@ -588,15 +588,26 @@ export function buildPropMesh(p, matLib, refs = {}) {
       break;
     }
     case 'dock': {
-      g.add(mBox(w, h, d, M.wood, 0, h / 2, 0, false));
+      const pierD = d + 2.2;
+      const zOff = 1.1;
+      g.add(mBox(w, h, pierD, M.wood, 0, h / 2, zOff, false));
+      for (const sx of [-1, 1]) {
+        for (const pz of [2.4, 3.55]) {
+          g.add(mCyl(0.11, 0.11, 0.52, M.warmWood, sx * (w * 0.43), -0.10, pz, 8, false));
+        }
+        g.add(mCyl(0.09, 0.11, 0.24, M.darkMetal, sx * (w * 0.42), h + 0.11, 3.45, 8, false));
+      }
       break;
     }
     case 'boat': {
       g.userData.dynamic = true;
-      g.add(mBox(w, 0.52, d, M.paintedMetal, 0, 0.30, 0));
-      g.add(mBox(w * 0.56, 0.65, d * 0.62, M.glass, -0.35, 0.84, 0, false));
-      const bl = mBox(0.14, 0.12, 0.14, M.glowCyan, w / 2 - 0.22, 0.72, 0, false);
+      const zMoor = 3.45;
+      g.add(mBox(w, 0.56, d, M.paintedMetal, 0, 0.05, zMoor));
+      g.add(mBox(w * 0.86, 0.16, d * 0.84, M.white, 0, 0.36, zMoor, false));
+      g.add(mBox(w * 0.52, 0.58, d * 0.60, M.glass, -0.32, 0.66, zMoor, false));
+      const bl = mBox(0.14, 0.12, 0.14, M.glowCyan, w / 2 - 0.22, 0.54, zMoor, false);
       g.add(bl);
+      refs.boat = g;
       refs.boatLight = bl;
       break;
     }

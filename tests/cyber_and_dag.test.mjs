@@ -544,3 +544,14 @@ test('rigs.js enforces shadow-caster discipline, VIP/enforcer silhouettes, and c
   botMaint.dispose();
   botSec.dispose();
 });
+
+test('nocturnal equirectangular skybox asset exists with valid JPEG magic bytes and SKY_U_OFFSET alignment', async () => {
+  const { SKY_U_OFFSET } = await import('../src/render/mats.js');
+  assert.ok(Math.abs(SKY_U_OFFSET - 0.106) < 1e-6);
+  const skyPath = resolve(ROOT, 'assets/sky/aurora_night_pano.jpg');
+  const buf = await readFile(skyPath);
+  assert.ok(buf.length > 100_000, `Expected skybox asset > 100 KB, got ${buf.length}`);
+  assert.equal(buf[0], 0xff);
+  assert.equal(buf[1], 0xd8);
+  assert.equal(buf[2], 0xff);
+});

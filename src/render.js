@@ -88,11 +88,14 @@ export class View {
 
     this.matLib = createMaterialLibrary(this.renderer, this.quality);
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x050811);
-    this.scene.fog = new THREE.Fog(0x050811, 44, 110);
+    this.scene.background = new THREE.Color(0x050a14);
+    this.scene.fog = new THREE.Fog(0x060d19, 64, 185);
     this.scene.environment = this.matLib.envMap;
+    this.matLib.onEnvUpdate((tex) => {
+      this.scene.environment = tex;
+    });
 
-    this.camera = new THREE.PerspectiveCamera(62, 1, 0.1, 300);
+    this.camera = new THREE.PerspectiveCamera(62, 1, 0.1, 340);
     this.camYaw = Math.PI;
     this.camPitch = 0.42;
     this.camDist = 4.6;
@@ -137,18 +140,55 @@ export class View {
   }
 
   buildSky() {
-    const geo = new THREE.SphereGeometry(160, 24, 16);
+    const geo = new THREE.SphereGeometry(220, 48, 32);
     const mat = new THREE.ShaderMaterial({
       side: THREE.BackSide,
       depthWrite: false,
       fog: false,
-      uniforms: { top: { value: new THREE.Color(0x091324) }, bot: { value: new THREE.Color(0x121b28) } },
-      vertexShader: 'varying vec3 vP; void main(){ vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
-      fragmentShader: 'uniform vec3 top; uniform vec3 bot; varying vec3 vP; void main(){ float h = normalize(vP).y*0.5+0.5; gl_FragColor = vec4(mix(bot, top, smoothstep(0.35,0.85,h)),1.0); }',
+      toneMapped: true,
+      uniforms: {
+        top: { value: new THREE.Color(0x081222) },
+        bot: { value: new THREE.Color(0x0c1726) },
+        uPano: { value: this.matLib.skyTex },
+        uOffset: { value: this.matLib.skyUOffset ?? 0.106 },
+        uMix: { value: this.matLib.hasPano ? 1.0 : 0.0 },
+      },
+      vertexShader: /* glsl */ `
+        varying vec3 vP;
+        void main() {
+          vP = position;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        uniform vec3 top;
+        uniform vec3 bot;
+        uniform sampler2D uPano;
+        uniform float uOffset;
+        uniform float uMix;
+        varying vec3 vP;
+        void main() {
+          vec3 d = normalize(vP);
+          float h = d.y * 0.5 + 0.5;
+          vec3 grad = mix(bot, top, smoothstep(0.35, 0.85, h));
+          float u = fract(atan(d.z, d.x) * 0.15915494 + uOffset);
+          float v = clamp(asin(clamp(d.y, -1.0, 1.0)) * 0.31830989 + 0.5, 0.002, 0.998);
+          vec3 pano = texture2D(uPano, vec2(u, v)).rgb;
+          float lum = dot(pano, vec3(0.2126, 0.7152, 0.0722));
+          pano *= 1.08 + smoothstep(0.35, 0.90, lum) * 0.65;
+          gl_FragColor = vec4(mix(grad, pano, uMix), 1.0);
+          #include <tonemapping_fragment>
+          #include <colorspace_fragment>
+        }
+      `,
     });
     this.ownedGeos.push(geo);
     this.ownedMats.push(mat);
-    this.scene.add(new THREE.Mesh(geo, mat));
+    this.skyDome = new THREE.Mesh(geo, mat);
+    this.skyDome.frustumCulled = false;
+    this.skyMat = mat;
+    this.skyMix = this.matLib.hasPano ? 1.0 : 0.0;
+    this.scene.add(this.skyDome);
 
     const starGeo = new THREE.BufferGeometry();
     const pts = [];
@@ -162,7 +202,21 @@ export class View {
     const starMat = new THREE.PointsMaterial({ color: 0x9fb6d8, size: 0.7, sizeAttenuation: true, fog: false });
     this.ownedGeos.push(starGeo);
     this.ownedMats.push(starMat);
-    this.scene.add(new THREE.Points(starGeo, starMat));
+    this.skyStars = new THREE.Points(starGeo, starMat);
+    this.scene.add(this.skyStars);
+  }
+
+  updateSky(dt) {
+    if (!this.skyDome || !this.skyMat) return;
+    this.skyDome.position.set(this.camera.position.x, 0, this.camera.position.z);
+    if (this.matLib.hasPano && this.skyMix < 1) {
+      this.skyMix = Math.min(1, this.skyMix + Math.max(0.016, dt) * 2.8);
+      this.skyMat.uniforms.uMix.value = this.skyMix;
+      this.skyMat.uniformsNeedUpdate = true;
+    }
+    if (this.skyStars) {
+      this.skyStars.visible = this.skyMix < 0.98;
+    }
   }
 
   buildLights() {
@@ -188,11 +242,15 @@ export class View {
     }
 
     this.lightFixtures = LIGHTS.map((l) => {
+      const zn = zoneAt(l.x, l.z) || 'other';
+      const outdoor = zn === 'patio';
       const coneObj = buildLightCone(l, this.matLib);
-      this.scene.add(coneObj.group);
+      coneObj.group.visible = !outdoor;
+      if (!outdoor) this.scene.add(coneObj.group);
       return {
         def: l,
-        zone: zoneAt(l.x, l.z) || 'other',
+        zone: zn,
+        outdoor,
         coneObj,
         score: 0,
         flicker: 1,
@@ -201,13 +259,22 @@ export class View {
   }
 
   buildLevel() {
-    const groundGeo = scaleGeometryUVs(new THREE.PlaneGeometry(300, 300), 60, 60);
-    this.ownedGeos.push(groundGeo);
-    const ground = new THREE.Mesh(groundGeo, this.matLib.concrete);
-    ground.rotation.x = -Math.PI / 2;
-    ground.position.y = -0.06;
-    ground.receiveShadow = true;
-    this.scene.add(ground);
+    // Bahía nocturna circundante (refleja el panorama lunar PMREM bajo el muelle y la lancha)
+    const seaGeo = scaleGeometryUVs(new THREE.PlaneGeometry(360, 360), 120, 240);
+    this.ownedGeos.push(seaGeo);
+    const sea = new THREE.Mesh(seaGeo, this.matLib.ocean);
+    sea.rotation.x = -Math.PI / 2;
+    sea.position.y = -0.11;
+    sea.receiveShadow = true;
+    this.scene.add(sea);
+
+    // Plataforma costera de piedra que sostiene el perímetro completo [-22..22] x [-18..26]
+    const cliffGeo = scaleBoxUVs(new THREE.BoxGeometry(46.4, 0.32, 45.2), 46.4, 0.32, 45.2, 3.2);
+    this.ownedGeos.push(cliffGeo);
+    const cliff = new THREE.Mesh(cliffGeo, this.matLib.concrete);
+    cliff.position.set(0, -0.165, 3.4);
+    cliff.receiveShadow = true;
+    this.scene.add(cliff);
 
     this.zoneFloors = {};
     this.zoneLabels = [];
@@ -271,7 +338,9 @@ export class View {
     const doorSignBuckets = new Map();
     const staticRoots = [];
     if (this.lightFixtures) {
-      for (const lf of this.lightFixtures) staticRoots.push(lf.coneObj.group);
+      for (const lf of this.lightFixtures) {
+        if (!lf.outdoor) staticRoots.push(lf.coneObj.group);
+      }
     }
 
     for (const d of DOORS) {
@@ -326,6 +395,7 @@ export class View {
       staticRoots.push(pg);
     }
     this.chandelier = this.propRefs.chandelier || null;
+    this.boat = this.propRefs.boat || null;
     this.puddles = { lab: this.propRefs.puddleLab || null };
     this.terminalScreen = this.propRefs.terminalScreen || null;
     this.poolWater = this.propRefs.poolWater || null;
@@ -660,7 +730,8 @@ export class View {
     const sorted = this.lightFixtures.slice().sort((a, b) => a.score - b.score);
     const activeLimit = this.quality === 'low' ? 4 : this.lightPool.length;
     for (let i = 0; i < sorted.length; i++) {
-      sorted[i].coneObj.setFactor(i < activeLimit ? sorted[i].flicker * (this.instinct ? 0.55 : 1) : 0);
+      const f = (!sorted[i].outdoor && i < activeLimit) ? sorted[i].flicker * (this.instinct ? 0.55 : 1) : 0;
+      sorted[i].coneObj.setFactor(f);
     }
     const instScale = this.instinct ? 0.75 : 1;
     for (let i = 0; i < this.lightPool.length; i++) {
@@ -839,6 +910,10 @@ export class View {
       this.terminalScreen.material.color.setHex(sim.objectives.core ? 0x2a4548 : COLORS.cyan).multiplyScalar(sim.objectives.core ? 0.8 : 1.5);
     }
     if (this.poolWater) this.poolWater.material.opacity = 0.8 + Math.sin(t * 1.5) * 0.05;
+    if (this.boat) {
+      this.boat.position.y = Math.sin(t * 1.35) * 0.024;
+      this.boat.rotation.z = Math.sin(t * 0.95) * 0.016;
+    }
 
     // Trampas eléctricas colocadas
     this.traps ||= new Map();
@@ -894,6 +969,7 @@ export class View {
 
     this.updateFx(sim, t);
     this.updateCamera(dt, input);
+    this.updateSky(dt);
     this.updateLightPool(sim, focus.x, focus.z);
     this.postfx.render(this.scene, this.camera);
 

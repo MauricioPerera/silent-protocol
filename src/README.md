@@ -14,7 +14,7 @@ Domain mechanics implemented across `src`:
 
 ## Subdirectories
 
-- render: [./render/README.md](./render/README.md) - Procedural `DataTexture` PBR materials (MaterialCraft-adapted TypedArray operators + non-blocking `1024x1024` Web Worker upgrade) + `PMREM` environment, articulated FK/IK character and bot rigs, beveled/lathed Mansion Aurora props + static mesh batching, and `HalfFloatType` MSAA `4x` Bloom + `AgX` post-processing.
+- render: [./render/README.md](./render/README.md) - Procedural `DataTexture` PBR materials (MaterialCraft-adapted TypedArray operators + non-blocking `1024x1024` Web Worker upgrade), `360°` nocturnal coastal skybox (`../assets/sky/aurora_night_pano.jpg`) + HDR `PMREM` environment, articulated FK/IK character and bot rigs, beveled/lathed Mansion Aurora props + static mesh batching, and `HalfFloatType` MSAA `4x` Bloom + `AgX` post-processing.
 
 ## Interface
 

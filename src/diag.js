@@ -33,6 +33,7 @@ function runShowcase(mode, quality, canvas, View) {
   const view = new View(canvas, null, { showcase: true, quality });
   const scene = view.scene;
   const matLib = view.matLib;
+  view.buildSky();
 
   scene.add(new THREE.HemisphereLight(0x4c6288, 0x101520, 0.75));
   const key = new THREE.DirectionalLight(0xfff0d8, 1.35);
@@ -188,6 +189,7 @@ function runShowcase(mode, quality, canvas, View) {
       Math.cos(yaw) * Math.cos(pitch) * radius
     );
     view.camera.lookAt(0, 0.85, 0);
+    view.updateSky(dt);
     view.postfx.render(scene, view.camera);
 
     window.__showReport = {

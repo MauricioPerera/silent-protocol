@@ -2,7 +2,7 @@
 
 ## System Overview
 
-**SILENT PROTOCOL — Unidad S-7** (`silence`) is a zero-build, zero-external-asset 3D social-stealth and cyber-infiltration web game built with ES modules, bundled Three.js `r160` (`./vendor/three.module.js`), procedural WebGL2 PBR (`1024x1024` progressive Web Worker node-graph textures adapted from `storytold/materialcraft`) + HDR Bloom rendering, articulated FK/IK character and robotic rigs with distinct VIP/enforcer silhouettes, HTML5 HUD overlays, WebAudio synthesis, and a hardened Node.js static HTTP server (`./server.mjs`). Players control infiltration android S-7 inside Mansion Aurora to eliminate two high-value targets (Marcus Vandermeer and Dr. Elena Kessler), exfiltrate the Aurora data core, and extract by boat — combining Hitman-style disguises, environmental accidents, poison, and rear takedowns with Watch Dogs-style RF-attenuated remote hacking, CCTV camera network hopping, quadruped bot hijacking through low vents, and active security signal tracing.
+**SILENT PROTOCOL — Unidad S-7** (`silence`) is a zero-build 3D social-stealth and cyber-infiltration web game built with ES modules, bundled Three.js `r160` (`./vendor/three.module.js`), procedural WebGL2 PBR (`1024x1024` progressive Web Worker node-graph textures adapted from `storytold/materialcraft`), a seam-blended `360°` nocturnal coastal skybox (`./assets/sky/aurora_night_pano.jpg`) driving inverse-tonemapped HDR `PMREM` reflections + HDR Bloom rendering, articulated FK/IK character and robotic rigs with distinct VIP/enforcer silhouettes, HTML5 HUD overlays, WebAudio synthesis, and a hardened Node.js static HTTP server (`./server.mjs`). Players control infiltration android S-7 inside Mansion Aurora to eliminate two high-value targets (Marcus Vandermeer and Dr. Elena Kessler), exfiltrate the Aurora data core, and extract by boat — combining Hitman-style disguises, environmental accidents, poison, and rear takedowns with Watch Dogs-style RF-attenuated remote hacking, CCTV camera network hopping, quadruped bot hijacking through low vents, and active security signal tracing.
 
 - **Play online (GitHub Pages)**: https://mauricioperera.github.io/silent-protocol/
 - **Run locally**: `npm start` (`node server.mjs`) and open `http://127.0.0.1:8080`.
@@ -41,6 +41,7 @@ flowchart LR
 - src: [./src/README.md](./src/README.md) - Core 2D XZ stealth & cyber simulation (`sim.js`, `cyber.js`, `npc.js`, `entities.js`, `nav.js`, `level.js`, `config.js`, `mathx.js`), Three.js WebGL2 orchestrator (`render.js` + [./src/render/README.md](./src/render/README.md)), on-demand diagnostic harness (`diag.js`), DOM/minimap HUD controller (`ui.js`), and WebAudio synth (`audio.js`).
 - docs: Design specifications (`./docs/designs/silent_protocol_2_pbr_cyber.md`).
 - tests: Automated `node:test` + `node:assert/strict` verification suites (`./tests/sim.test.mjs` and `./tests/cyber_and_dag.test.mjs`).
+- assets: Local first-party panoramic skybox asset (`./assets/sky/aurora_night_pano.jpg`) used for the nocturnal coastal dome and HDR `PMREM` specular environment.
 - vendor: Vendored third-party Three.js `r160` ES module bundle (`./vendor/three.module.js`, excluded from first-party source contracts; see [./THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)).
 
 ## Global Invariants

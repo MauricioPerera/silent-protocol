@@ -15,17 +15,139 @@ function targetSizeForQuality(quality) {
   return 256;
 }
 
-function buildPmremEnvironment(renderer) {
+export const SKY_U_OFFSET = 0.106; // Alinea el claro lunar (u=0.5) con moon.position (-28, 40, 22)
+
+function makeSeamlessPanoCanvas(img) {
+  const outW = 2048;
+  const outH = 1024;
+  const blendW = 192;
+  const srcW = outW + blendW;
+
+  const tmp = document.createElement('canvas');
+  tmp.width = srcW;
+  tmp.height = outH;
+  const tg = tmp.getContext('2d', { willReadFrequently: true });
+  tg.drawImage(img, 0, 0, srcW, outH);
+  const src = tg.getImageData(0, 0, srcW, outH).data;
+
+  const out = document.createElement('canvas');
+  out.width = outW;
+  out.height = outH;
+  const og = out.getContext('2d');
+  const outImg = og.createImageData(outW, outH);
+  const dst = outImg.data;
+
+  const keepW = outW - blendW;
+  for (let y = 0; y < outH; y++) {
+    const rowSrc = y * srcW * 4;
+    const rowDst = y * outW * 4;
+    for (let x = 0; x < keepW; x++) {
+      const si = rowSrc + (x + blendW) * 4;
+      const di = rowDst + x * 4;
+      dst[di] = src[si];
+      dst[di + 1] = src[si + 1];
+      dst[di + 2] = src[si + 2];
+      dst[di + 3] = 255;
+    }
+    for (let k = 0; k < blendW; k++) {
+      const w = 0.5 - 0.5 * Math.cos((Math.PI * k) / blendW);
+      const siA = rowSrc + (outW + k) * 4;
+      const siB = rowSrc + k * 4;
+      const di = rowDst + (keepW + k) * 4;
+      dst[di] = Math.round(src[siA] * (1 - w) + src[siB] * w);
+      dst[di + 1] = Math.round(src[siA + 1] * (1 - w) + src[siB + 1] * w);
+      dst[di + 2] = Math.round(src[siA + 2] * (1 - w) + src[siB + 2] * w);
+      dst[di + 3] = 255;
+    }
+  }
+
+  // Estabilización polar en cenit (y=0) y nadir (y=outH-1) para evitar pellizco esférico
+  const avgRow = (ry) => {
+    let r = 0, g = 0, b = 0;
+    const base = ry * outW * 4;
+    for (let x = 0; x < outW; x++) {
+      const o = base + x * 4;
+      r += dst[o]; g += dst[o + 1]; b += dst[o + 2];
+    }
+    return [r / outW, g / outW, b / outW];
+  };
+  const [zr, zg, zb] = avgRow(3);
+  const zenithSpan = 34;
+  for (let y = 0; y < zenithSpan; y++) {
+    const t = Math.pow(1 - y / zenithSpan, 2);
+    const base = y * outW * 4;
+    for (let x = 0; x < outW; x++) {
+      const o = base + x * 4;
+      dst[o] = Math.round(dst[o] * (1 - t) + zr * t);
+      dst[o + 1] = Math.round(dst[o + 1] * (1 - t) + zg * t);
+      dst[o + 2] = Math.round(dst[o + 2] * (1 - t) + zb * t);
+    }
+  }
+  const [nr, ng, nb] = avgRow(outH - 4);
+  const nadirSpan = 46;
+  for (let y = outH - nadirSpan; y < outH; y++) {
+    const t = Math.pow((y - (outH - nadirSpan)) / (nadirSpan - 1), 2);
+    const base = y * outW * 4;
+    for (let x = 0; x < outW; x++) {
+      const o = base + x * 4;
+      dst[o] = Math.round(dst[o] * (1 - t) + nr * t);
+      dst[o + 1] = Math.round(dst[o + 1] * (1 - t) + ng * t);
+      dst[o + 2] = Math.round(dst[o + 2] * (1 - t) + nb * t);
+    }
+  }
+
+  og.putImageData(outImg, 0, 0);
+  return out;
+}
+
+function buildPmremEnvironment(renderer, panoTex = null, panoReady = false) {
   const pmrem = new THREE.PMREMGenerator(renderer);
   pmrem.compileCubemapShader();
   const envScene = new THREE.Scene();
-  envScene.background = new THREE.Color(0x0b1220);
+  envScene.background = new THREE.Color(0x09111e);
 
   const disposables = [];
+  if (panoReady && panoTex) {
+    const skyGeo = new THREE.SphereGeometry(28, 40, 24);
+    const skyMat = new THREE.ShaderMaterial({
+      side: THREE.BackSide,
+      depthWrite: false,
+      toneMapped: false,
+      uniforms: {
+        uPano: { value: panoTex },
+        uOffset: { value: SKY_U_OFFSET },
+      },
+      vertexShader: /* glsl */ `
+        varying vec3 vDir;
+        void main() {
+          vDir = position;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        uniform sampler2D uPano;
+        uniform float uOffset;
+        varying vec3 vDir;
+        void main() {
+          vec3 d = normalize(vDir);
+          float u = fract(atan(d.z, d.x) * 0.15915494 + uOffset);
+          float v = clamp(asin(clamp(d.y, -1.0, 1.0)) * 0.31830989 + 0.5, 0.002, 0.998);
+          vec3 c = texture2D(uPano, vec2(u, v)).rgb;
+          float lum = dot(c, vec3(0.2126, 0.7152, 0.0722));
+          float hdrBoost = 1.15 + pow(smoothstep(0.26, 0.92, lum), 2.0) * 5.2;
+          gl_FragColor = vec4(c * hdrBoost, 1.0);
+        }
+      `,
+    });
+    envScene.add(new THREE.Mesh(skyGeo, skyMat));
+    disposables.push(skyGeo, skyMat);
+  }
+
+  const panelScale = panoReady ? 0.52 : 1.0;
   const addPanel = (w, h, color, intensity, x, y, z, rx, ry) => {
     const geo = new THREE.PlaneGeometry(w, h);
     const mat = new THREE.MeshBasicMaterial({
-      color: new THREE.Color(color).multiplyScalar(intensity),
+      color: new THREE.Color(color).multiplyScalar(intensity * panelScale),
       side: THREE.DoubleSide,
       toneMapped: false,
     });
@@ -36,13 +158,15 @@ function buildPmremEnvironment(renderer) {
     disposables.push(geo, mat);
   };
 
-  addPanel(16, 16, 0xffd2a0, 2.25, 0, 10, 0, Math.PI / 2, 0);
-  addPanel(12, 6, 0x4fe3d0, 1.95, 12, 3, -6, 0, -Math.PI / 2);
-  addPanel(12, 6, 0x7aa6ff, 1.65, -12, 4, 6, 0, Math.PI / 2);
-  addPanel(14, 5, 0xffb36b, 1.55, 0, 2.5, 12, 0, Math.PI);
-  addPanel(20, 20, 0x101826, 0.75, 0, -9, 0, -Math.PI / 2, 0);
+  if (!panoReady) {
+    addPanel(16, 16, 0xffd2a0, 2.25, 0, 10, 0, Math.PI / 2, 0);
+    addPanel(12, 6, 0x4fe3d0, 1.95, 12, 3, -6, 0, -Math.PI / 2);
+    addPanel(12, 6, 0x7aa6ff, 1.65, -12, 4, 6, 0, Math.PI / 2);
+    addPanel(14, 5, 0xffb36b, 1.55, 0, 2.5, 12, 0, Math.PI);
+    addPanel(20, 20, 0x101826, 0.75, 0, -9, 0, -Math.PI / 2, 0);
+  }
 
-  const envRT = pmrem.fromScene(envScene, 0.04);
+  const envRT = pmrem.fromScene(envScene, panoReady ? 0.015 : 0.04);
   for (const d of disposables) d.dispose();
   pmrem.dispose();
   return envRT;
@@ -105,10 +229,13 @@ export function createMaterialLibrary(renderer, quality = 'high') {
     const jobId = activeJobId;
     inFlightSize = 0;
     const nextAniso = anisoFor(q);
-    for (const t of allTextures) {
-      if (t.anisotropy !== nextAniso) {
-        t.anisotropy = nextAniso;
-        t.needsUpdate = true;
+    for (const k of ARCHETYPES) {
+      const s = sets[k];
+      for (const t of [s.map, s.ormMap, s.normalMap]) {
+        if (t.anisotropy !== nextAniso) {
+          t.anisotropy = nextAniso;
+          t.needsUpdate = true;
+        }
       }
     }
 
@@ -166,7 +293,55 @@ export function createMaterialLibrary(renderer, quality = 'high') {
     scheduleWorkerBake(targetSize, quality);
   }
 
-  const envRT = buildPmremEnvironment(renderer);
+  let hasPano = false;
+  let skyTex;
+  if (typeof document !== 'undefined') {
+    const bootSky = document.createElement('canvas');
+    bootSky.width = 4;
+    bootSky.height = 2;
+    const bg = bootSky.getContext('2d');
+    bg.fillStyle = '#091324'; bg.fillRect(0, 0, 4, 1);
+    bg.fillStyle = '#070f1c'; bg.fillRect(0, 1, 4, 1);
+    skyTex = new THREE.CanvasTexture(bootSky);
+  } else {
+    skyTex = new THREE.DataTexture(new Uint8Array([9, 19, 36, 255, 7, 15, 28, 255]), 1, 2, THREE.RGBAFormat);
+    skyTex.needsUpdate = true;
+  }
+  skyTex.colorSpace = THREE.SRGBColorSpace;
+  skyTex.wrapS = THREE.RepeatWrapping;
+  skyTex.wrapT = THREE.ClampToEdgeWrapping;
+  skyTex.minFilter = THREE.LinearFilter;
+  skyTex.magFilter = THREE.LinearFilter;
+  allTextures.push(skyTex);
+
+  let envRT = buildPmremEnvironment(renderer, skyTex, false);
+  let curEnvTex = envRT.texture;
+  const envListeners = [];
+
+  if (typeof Image !== 'undefined' && typeof document !== 'undefined') {
+    const panoImg = new Image();
+    panoImg.decoding = 'async';
+    panoImg.onload = () => {
+      if (disposed) return;
+      try {
+        const seamless = makeSeamlessPanoCanvas(panoImg);
+        skyTex.dispose();
+        skyTex.source = new THREE.Source(seamless);
+        skyTex.needsUpdate = true;
+        hasPano = true;
+
+        const nextEnvRT = buildPmremEnvironment(renderer, skyTex, true);
+        const prevEnvRT = envRT;
+        envRT = nextEnvRT;
+        curEnvTex = nextEnvRT.texture;
+        prevEnvRT.dispose();
+        for (const fn of envListeners) fn(curEnvTex);
+      } catch (_err) {
+        // Mantiene entorno procedural si falla el canvas 2D
+      }
+    };
+    panoImg.src = new URL('../../assets/sky/aurora_night_pano.jpg', import.meta.url).href;
+  }
 
   const pbr = (setKey, opts = {}) => {
     const s = sets[setKey];
@@ -202,25 +377,25 @@ export function createMaterialLibrary(renderer, quality = 'high') {
   const trimOpaque = new THREE.MeshBasicMaterial({ color: 0x388994 });
   const trimXray = new THREE.MeshBasicMaterial({ color: 0x4fe3d0, transparent: true, opacity: 0.48, depthWrite: false });
 
-  const brushedSteel = pbr('brushed_steel', { nScale: 0.55, env: 1.3, extra: { color: 0xd4dde8 } });
-  const paintedMetal = pbr('painted_metal', { nScale: 0.62, env: 1.0, extra: { color: 0x7c8796 } });
-  const darkMetal = pbr('painted_metal', { useAlbedo: false, nScale: 0.55, env: 0.9, extra: { color: 0x232832, roughness: 0.56, metalness: 0.72 } });
-  const gold = pbr('brushed_steel', { useAlbedo: false, nScale: 0.42, env: 1.45, extra: { color: 0xe2bc64, roughness: 0.30, metalness: 0.95 } });
-  const wood = pbr('wood_parquet', { nScale: 0.68, env: 0.85, extra: { color: 0xa67754 } });
-  const warmWood = pbr('wood_parquet', { nScale: 0.64, env: 0.92, extra: { color: 0x724930 } });
-  const ceramic = pbr('ceramic_tile', { nScale: 0.68, env: 1.1, extra: { color: 0xd8e2ea } });
-  const white = pbr('ceramic_tile', { useAlbedo: false, nScale: 0.35, env: 0.88, extra: { color: 0xe4e9ef, roughness: 0.38, metalness: 0.08 } });
-  const concrete = pbr('concrete_service', { nScale: 0.78, env: 0.58, extra: { color: 0x8d95a0 } });
-  const leather = pbr('leather_upholstery', { nScale: 0.75, env: 0.8, extra: { color: 0x6a3c48 } });
-  const darkLeather = pbr('leather_upholstery', { useAlbedo: false, nScale: 0.68, env: 0.78, extra: { color: 0x262932, roughness: 0.55, metalness: 0.08 } });
-  const fabric = pbr('fabric_suit', { nScale: 0.62, env: 0.52, extra: { color: 0x6e2a3c } });
-  const green = pbr('turf_garden', { nScale: 0.82, env: 0.48, extra: { color: 0x6ca272 } });
+  const brushedSteel = pbr('brushed_steel', { nScale: 0.55, env: 1.62, extra: { color: 0xd4dde8 } });
+  const paintedMetal = pbr('painted_metal', { nScale: 0.62, env: 1.18, extra: { color: 0x7c8796 } });
+  const darkMetal = pbr('painted_metal', { useAlbedo: false, nScale: 0.55, env: 1.15, extra: { color: 0x232832, roughness: 0.52, metalness: 0.76 } });
+  const gold = pbr('brushed_steel', { useAlbedo: false, nScale: 0.42, env: 1.72, extra: { color: 0xe2bc64, roughness: 0.27, metalness: 0.96 } });
+  const wood = pbr('wood_parquet', { nScale: 0.68, env: 0.95, extra: { color: 0xa67754 } });
+  const warmWood = pbr('wood_parquet', { nScale: 0.64, env: 1.02, extra: { color: 0x724930 } });
+  const ceramic = pbr('ceramic_tile', { nScale: 0.68, env: 1.32, extra: { color: 0xd8e2ea } });
+  const white = pbr('ceramic_tile', { useAlbedo: false, nScale: 0.35, env: 0.98, extra: { color: 0xe4e9ef, roughness: 0.36, metalness: 0.08 } });
+  const concrete = pbr('concrete_service', { nScale: 0.78, env: 0.65, extra: { color: 0x8d95a0 } });
+  const leather = pbr('leather_upholstery', { nScale: 0.75, env: 0.88, extra: { color: 0x6a3c48 } });
+  const darkLeather = pbr('leather_upholstery', { useAlbedo: false, nScale: 0.68, env: 0.86, extra: { color: 0x262932, roughness: 0.55, metalness: 0.08 } });
+  const fabric = pbr('fabric_suit', { nScale: 0.62, env: 0.56, extra: { color: 0x6e2a3c } });
+  const green = pbr('turf_garden', { nScale: 0.82, env: 0.52, extra: { color: 0x6ca272 } });
 
   const glass = new THREE.MeshStandardMaterial({
     color: 0xaef0ff,
-    roughness: 0.08,
-    metalness: 0.25,
-    envMapIntensity: 1.5,
+    roughness: 0.06,
+    metalness: 0.30,
+    envMapIntensity: 1.85,
     transparent: true,
     opacity: 0.36,
   });
@@ -228,11 +403,19 @@ export function createMaterialLibrary(renderer, quality = 'high') {
     color: 0x1b7696,
     normalMap: sets.plaster_wall.normalMap,
     normalScale: new THREE.Vector2(0.38, 0.38),
-    roughness: 0.08,
-    metalness: 0.35,
-    envMapIntensity: 1.45,
+    roughness: 0.07,
+    metalness: 0.42,
+    envMapIntensity: 1.80,
     transparent: true,
     opacity: 0.84,
+  });
+  const ocean = new THREE.MeshStandardMaterial({
+    color: 0x050f1c,
+    normalMap: sets.plaster_wall.normalMap,
+    normalScale: new THREE.Vector2(0.85, 0.85),
+    roughness: 0.22,
+    metalness: 0.82,
+    envMapIntensity: 1.55,
   });
 
   const glowCyan = new THREE.MeshBasicMaterial({ color: new THREE.Color(COLORS.cyan).multiplyScalar(1.6), toneMapped: false });
@@ -242,7 +425,7 @@ export function createMaterialLibrary(renderer, quality = 'high') {
   const glowGreen = new THREE.MeshBasicMaterial({ color: new THREE.Color(0x7dffb0).multiplyScalar(1.5), toneMapped: false });
   const glowWarm = new THREE.MeshBasicMaterial({ color: new THREE.Color(0xffdfa8).multiplyScalar(1.65), toneMapped: false });
 
-  allMaterials.push(wallXray, trimOpaque, trimXray, glass, water, glowCyan, glowAmber, glowRed, glowGold, glowGreen, glowWarm);
+  allMaterials.push(wallXray, trimOpaque, trimXray, glass, water, ocean, glowCyan, glowAmber, glowRed, glowGold, glowGreen, glowWarm);
   const sharedSet = new Set(allMaterials);
 
   function makeZoneFloorMaterial(zone) {
@@ -351,9 +534,15 @@ export function createMaterialLibrary(renderer, quality = 'high') {
     get quality() { return curQuality; },
     get size() { return curSize; },
     get targetSize() { return targetSize; },
+    get envMap() { return curEnvTex; },
+    get hasPano() { return hasPano; },
+    skyTex,
+    skyUOffset: SKY_U_OFFSET,
+    onEnvUpdate(fn) {
+      if (typeof fn === 'function') envListeners.push(fn);
+    },
     archetypes: ARCHETYPES,
     sets,
-    envMap: envRT.texture,
     sharedSet,
     wallOpaque,
     wallXray,
@@ -374,6 +563,7 @@ export function createMaterialLibrary(renderer, quality = 'high') {
     green,
     glass,
     water,
+    ocean,
     glowCyan,
     glowAmber,
     glowRed,
