@@ -1,0 +1,393 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { ALERT, CYBER, PLAYER } from '../src/config.js';
+import { VENTS, UNIT_DEFS, wallBlocked, countWallCrossings, zoneAt } from '../src/level.js';
+import { dist, resolveCircle } from '../src/mathx.js';
+import { damagePlayer, witnessCrime, killNPC } from '../src/entities.js';
+import {
+  createSim,
+  stepSim,
+  getContext,
+  doAction,
+  useItem,
+  shoot,
+  effectiveHackRange,
+  executeCyberAction,
+  cycleCameraLink,
+  disconnectLink,
+  missionRating,
+} from '../src/sim.js';
+
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const IDLE_INPUT = { mx: 0, mz: 0, camYaw: Math.PI, run: false, crouch: false, aim: false, instinct: false };
+
+function advance(sim, seconds, input = IDLE_INPUT) {
+  const ticks = Math.round(seconds * 60);
+  for (let i = 0; i < ticks; i++) stepSim(sim, 1 / 60, input);
+}
+
+function isolateNPCs(sim, keepIds = []) {
+  const keep = new Set(keepIds);
+  for (const n of sim.npcs) {
+    if (keep.has(n.id)) continue;
+    n.x = -20;
+    n.z = 24;
+    n.yaw = Math.PI;
+    n.route = [[-20, 24, 9999]];
+    n.routeIdx = 0;
+    n.state = 'idle';
+    n.dwell = 9999;
+  }
+}
+
+test('headless modules enforce strict acyclic DAG and zero DOM/WebGL/THREE coupling', async () => {
+  const headlessFiles = [
+    'src/config.js',
+    'src/mathx.js',
+    'src/level.js',
+    'src/nav.js',
+    'src/entities.js',
+    'src/npc.js',
+    'src/cyber.js',
+    'src/sim.js',
+  ];
+
+  const allSrcFiles = [
+    ...headlessFiles,
+    'src/render/mats.js',
+    'src/render/props.js',
+    'src/render/postfx.js',
+    'src/render/rigs.js',
+    'src/render.js',
+    'src/diag.js',
+    'src/ui.js',
+    'src/audio.js',
+    'src/main.js',
+  ];
+
+  const forbidden = /\b(window|document|navigator|WebGLRenderingContext|WebGL2RenderingContext|THREE|requestAnimationFrame|AudioContext)\b/;
+  const externalAssetRe = /\b(https?:\/\/|fetch\s*\(|TextureLoader|GLTFLoader|AudioLoader)\b/;
+  const adj = new Map();
+
+  for (const rel of allSrcFiles) {
+    const abs = resolve(ROOT, rel);
+    const src = await readFile(abs, 'utf8');
+    const codeOnly = src.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+    assert.equal(externalAssetRe.test(codeOnly), false, `Source file ${rel} references external URLs or asset loaders`);
+    const isHeadless = headlessFiles.includes(rel);
+    if (isHeadless) {
+      assert.equal(forbidden.test(codeOnly), false, `Headless file ${rel} contains forbidden browser/WebGL symbol`);
+    }
+
+    const deps = [];
+    const importRe = /(?:import\s+(?:[\s\S]*?from\s+)?|import\s*\(\s*)['"]([^'"]+)['"]/g;
+    let m;
+    while ((m = importRe.exec(codeOnly)) !== null) {
+      const spec = m[1];
+      if (isHeadless) {
+        assert.equal(spec.includes('render') || spec.includes('vendor') || spec.includes('ui') || spec.includes('audio') || spec.includes('diag'), false,
+          `Headless file ${rel} imports presentation module ${spec}`);
+      }
+      if (spec.startsWith('.') && !spec.includes('vendor')) {
+        const targetAbs = resolve(dirname(abs), spec);
+        const targetRel = targetAbs.slice(ROOT.length + 1).replace(/\\/g, '/');
+        deps.push(targetRel);
+      }
+    }
+    adj.set(rel, deps);
+  }
+
+  // Detect any cycle via DFS coloring across ALL src/ modules (0 = unvisited, 1 = visiting, 2 = visited)
+  const color = new Map();
+  function dfs(node, stack = []) {
+    color.set(node, 1);
+    for (const next of adj.get(node) || []) {
+      const c = color.get(next) || 0;
+      assert.notEqual(c, 1, `Circular dependency detected: ${[...stack, node, next].join(' -> ')}`);
+      if (c === 0) dfs(next, [...stack, node]);
+    }
+    color.set(node, 2);
+  }
+  for (const f of allSrcFiles) {
+    if (!color.get(f)) dfs(f);
+  }
+});
+
+test('seeded simulation produces bit-identical state across 300 ticks including cyber actions', () => {
+  const runScenario = () => {
+    const sim = createSim({ seed: 1337 });
+    for (let i = 0; i < 120; i++) {
+      stepSim(sim, 1 / 60, { mx: 0.3, mz: 1, camYaw: 2.8, run: true, crouch: false, aim: false, instinct: i > 60 });
+    }
+    sim.player.x = -8;
+    sim.player.z = -9;
+    executeCyberAction(sim, 'cam_hop', 'cam_corr', 1.5, 0.3);
+    for (let i = 0; i < 90; i++) {
+      stepSim(sim, 1 / 60, { mx: 0, mz: 0, camYaw: 1.5, camYawOffset: 0.2, instinct: false });
+    }
+    disconnectLink(sim, 'manual');
+    for (let i = 0; i < 90; i++) {
+      stepSim(sim, 1 / 60, { mx: -0.5, mz: 0.5, camYaw: 1.1, run: false, crouch: true, aim: false, instinct: false });
+    }
+    return sim;
+  };
+
+  const simA = runScenario();
+  const simB = runScenario();
+  assert.deepStrictEqual(simA, simB);
+});
+
+test('RF wall attenuation, corner deduplication, CCTV bus hopping, and remote overheat accident (CUJ 1)', () => {
+  const sim = createSim({ seed: 42 });
+  isolateNPCs(sim, ['kessler']);
+
+  // Low solid furniture (pool at [10, 19]) does NOT count as a wall crossing
+  assert.equal(countWallCrossings(2, 19, 18, 19), 0);
+
+  // Corner T-junction at (-10, -12) counts as 1 physical wall, not 2-3 overlapping segments
+  const cornerCross = countWallCrossings(-11.2, -13.2, -8.8, -10.8);
+  assert.equal(cornerCross, 1);
+
+  // CUJ 1: S-7 in backstage (-8, -9.5) cannot directly hack labfuse (21.6, 3.2) across mansion walls
+  sim.player.x = -8;
+  sim.player.z = -9.5;
+  const directRf = effectiveHackRange(sim, sim.interactables.labfuse.x, sim.interactables.labfuse.z);
+  assert.equal(directRf.inRange, false);
+  assert.equal(executeCyberAction(sim, 'overheat', 'labfuse'), false);
+
+  // cycleCameraLink must reject direct invocation while in 's7' mode
+  assert.equal(cycleCameraLink(sim, 1), false);
+
+  // Breach cam_corr nearby via RF, hop to cam_lab via wired CCTV bus, overheat labfuse
+  assert.equal(executeCyberAction(sim, 'cam_hop', 'cam_corr', 2.1, 0.35), true);
+  assert.equal(sim.link.mode, 'camera');
+  assert.equal(sim.link.targetId, 'cam_corr');
+  assert.equal(sim.player.jackedIn, true);
+
+  // Hop along CCTV bus until reaching cam_lab (28.2m away behind walls — succeeds on wired CCTV bus)
+  let hops = 0;
+  while (sim.link.targetId !== 'cam_lab' && hops++ < 5) {
+    assert.equal(cycleCameraLink(sim, 1), true);
+  }
+  assert.equal(sim.link.targetId, 'cam_lab');
+
+  // Injecting a camera loop across the wired CCTV bus must also bypass RF walls
+  sim.player.instinct = 100;
+  assert.equal(executeCyberAction(sim, 'cam_loop', 'cam_hall'), true);
+  assert.ok(sim.cams.find((c) => c.id === 'cam_hall').loopedUntil > sim.time + 15);
+  sim.player.instinct = 100;
+
+  // While linked, weapon/item triggers on S-7 are blocked
+  sim.player.item = 'pistol';
+  useItem(sim);
+  shoot(sim);
+  assert.equal(sim.stats.shots, 0);
+
+  // Overheat labfuse from cam_lab (direct LOS inside lab, 0 walls -> inRange === true)
+  assert.equal(executeCyberAction(sim, 'overheat', 'labfuse'), true);
+  assert.equal(sim.interactables.labfuse.used, true);
+  assert.ok(sim.electro > 30);
+
+  // Place Kessler in lab puddle -> dies as 'accident', preserving Silent Assassin
+  const kessler = sim.npcs.find((n) => n.id === 'kessler');
+  kessler.x = 17.8;
+  kessler.z = 4.5;
+  advance(sim, 0.2);
+  assert.equal(kessler.alive, false);
+  assert.equal(sim.stats.accidents, 1);
+  assert.equal(sim.stats.spotted, 0);
+  assert.equal(sim.stats.alerts, 0);
+
+  disconnectLink(sim, 'manual');
+  assert.equal(sim.link.mode, 's7');
+  assert.equal(sim.player.jackedIn, false);
+});
+
+test('all 4 VENTS and UNIT_DEFS are navigable by robotic units while solid walls block humans', () => {
+  const sim = createSim({ seed: 7 });
+  assert.equal(sim.npcs.length, 19);
+  assert.equal(sim.units.length, 2);
+  assert.equal(VENTS.length, 4);
+
+  for (const def of UNIT_DEFS) {
+    assert.equal(sim.unitNav.walkablePoint(def.x, def.z), true, `Unit ${def.id} spawn must be walkable`);
+    for (const wp of def.route) {
+      assert.equal(sim.unitNav.walkablePoint(wp[0], wp[1]), true, `Unit ${def.id} waypoint ${JSON.stringify(wp)} must be walkable`);
+    }
+  }
+
+  // Test crossing each of the 4 vents
+  for (const v of VENTS) {
+    const a = v.axis === 'z' ? { x: v.x - 1.1, z: v.z } : { x: v.x, z: v.z - 1.1 };
+    const b = v.axis === 'z' ? { x: v.x + 1.1, z: v.z } : { x: v.x, z: v.z + 1.1 };
+    assert.equal(sim.unitNav.walkablePoint(a.x, a.z), true, `Side A of ${v.id} must be walkable for units`);
+    assert.equal(sim.unitNav.walkablePoint(b.x, b.z), true, `Side B of ${v.id} must be walkable for units`);
+    const uPath = sim.unitNav.path(a.x, a.z, b.x, b.z);
+    assert.ok(uPath.length >= 1, `Expected unitNav path across ${v.id}`);
+    // Verify the unit path goes straight through the vent (< 3.5m path length, not detouring around mansion)
+    let len = 0, cur = a;
+    for (const pt of uPath) { len += dist(cur.x, cur.z, pt.x, pt.z); cur = pt; }
+    assert.ok(len < 3.5, `Expected direct vent traversal across ${v.id}, got length ${len.toFixed(2)}m`);
+
+    // Humans remain blocked by the wall at the vent coordinate
+    assert.equal(wallBlocked(a.x, a.z, b.x, b.z), true);
+    const humanPush = resolveCircle(v.x, v.z, PLAYER.radius, sim.boxes);
+    const pushedDist = Math.hypot(humanPush.x - v.x, humanPush.z - v.z);
+    assert.ok(pushedDist > 0.25, `Human circle at ${v.id} must be pushed out of solid wall`);
+  }
+
+  // Bot can sabotage 'cams' via botuse:cams, and Instinct does NOT recharge (+7/s) while piloting bot
+  isolateNPCs(sim, []);
+  sim.player.x = -13.5;
+  sim.player.z = -14.7;
+  assert.equal(executeCyberAction(sim, 'unit_hijack', 'bot_maint'), true);
+  const instAfterHijack = sim.player.instinct;
+  advance(sim, 1.0, { mx: 1, mz: 0, camYaw: Math.PI / 2, instinct: false });
+  assert.ok(sim.player.instinct < instAfterHijack - 2.0, 'Instinct must drain at unitDrainPerSec without +7/s recharge');
+
+  const bot = sim.units.find((u) => u.id === 'bot_maint');
+  bot.x = -3;
+  bot.z = -15.5;
+  const ctx = getContext(sim);
+  assert.equal(ctx.primary?.action, 'botuse:cams');
+  doAction(sim, 'botuse:cams');
+  assert.equal(sim.camsDisabled, true);
+});
+
+test('emergency watchdog disconnects S-7 before compromise on NPC awareness, camera suspicion, loop, and damage', () => {
+  const sim = createSim({ seed: 99 });
+  isolateNPCs(sim, ['guard_corr']);
+
+  sim.player.x = -14.2;
+  sim.player.z = -13.5;
+  sim.player.outfit = 'guard'; // legal zone, so ONLY jackedIn triggers suspicion!
+  assert.equal(executeCyberAction(sim, 'unit_hijack', 'bot_maint'), true);
+
+  const guard = sim.npcs.find((n) => n.id === 'guard_corr');
+  guard.x = -14.2;
+  guard.z = -16.8;
+  guard.yaw = 0; // facing +Z directly towards S-7 at z=-13.5
+
+  let ticks = 0;
+  while (sim.link.mode !== 's7' && ticks++ < 180) {
+    stepSim(sim, 1 / 60, IDLE_INPUT);
+  }
+  assert.equal(sim.link.mode, 's7', 'Watchdog must auto-disconnect S-7 upon guard awareness threshold');
+  assert.equal(sim.link.lastDisconnectReason, 'threat');
+  assert.equal(guard.compromised, false, 'S-7 must recover control well before compromise = 1.0');
+  assert.equal(sim.stats.spotted, 0);
+
+  // Camera loop suppresses witnessCrime
+  const simLoop = createSim({ seed: 100 });
+  isolateNPCs(simLoop, []);
+  simLoop.player.x = -8;
+  simLoop.player.z = -9.5;
+  assert.equal(executeCyberAction(simLoop, 'cam_loop', 'cam_corr'), true);
+  const seenWhileLooped = witnessCrime(simLoop, -4, -11.5, 'sabotage', 1);
+  assert.equal(seenWhileLooped, false);
+  assert.equal(simLoop.alarm, ALERT.CALM);
+
+  // Physical damage immediately severs remote link
+  simLoop.player.instinct = 100;
+  assert.equal(executeCyberAction(simLoop, 'cam_hop', 'cam_corr'), true);
+  damagePlayer(simLoop, 15);
+  assert.equal(simLoop.link.mode, 's7');
+  assert.equal(simLoop.link.lastDisconnectReason, 'damage');
+});
+
+test('guard spotting hijacked bot in restricted zone disables bot without burning S-7 disguise or incrementing spotted', () => {
+  const sim = createSim({ seed: 202 });
+  isolateNPCs(sim, ['chief']);
+
+  sim.player.x = -14.2;
+  sim.player.z = -14.7;
+  sim.player.outfit = 'suit';
+  assert.equal(executeCyberAction(sim, 'unit_hijack', 'bot_maint'), true);
+
+  // Move bot_maint into 'security' (not in bot_maint.allowedZones) right in front of chief
+  const bot = sim.units.find((u) => u.id === 'bot_maint');
+  bot.x = -5.5;
+  bot.z = -14.6;
+  const chief = sim.npcs.find((n) => n.id === 'chief');
+  chief.x = -3.0;
+  chief.z = -14.6;
+  chief.yaw = -Math.PI / 2; // facing -X towards (-5.5, -14.6)
+
+  advance(sim, 0.2);
+  assert.equal(sim.link.mode, 's7');
+  assert.equal(sim.link.lastDisconnectReason, 'unit_lost');
+  assert.ok(bot.disabledUntil > sim.time + 25);
+  assert.equal(!!sim.player.burned.suit, false, 'Destroying remote bot must not burn S-7 outfit');
+  assert.equal(sim.stats.spotted, 0, 'Destroying remote bot must not increment spotted');
+  assert.equal(sim.alarm, ALERT.CALM, 'Local bot disable must not trigger combat alarm');
+});
+
+test('signal trace lifecycle: activation, clean evasion with hysteresis, search dispatch without outfit burn, and chief/cams cancellation', () => {
+  // 1. Clean evasion preserves Silent Assassin and applies hysteresis (no infinite re-trigger)
+  const simEvade = createSim({ seed: 303 });
+  isolateNPCs(simEvade, ['chief', 'kessler', 'vandermeer']);
+  // Keep chief conscious and operational in security
+  const chief1 = simEvade.npcs.find((n) => n.id === 'chief');
+  chief1.x = -3; chief1.z = -14.6; chief1.state = 'idle'; chief1.dwell = 999;
+
+  simEvade.player.x = 18;
+  simEvade.player.z = -8;
+  assert.equal(executeCyberAction(simEvade, 'unit_hijack', 'bot_sec'), true); // +0.25
+  simEvade.player.instinct = 100;
+  const botSec = simEvade.units.find((u) => u.id === 'bot_sec');
+  botSec.x = 19.5; botSec.z = 2.5;
+  assert.equal(executeCyberAction(simEvade, 'overheat', 'labfuse'), true); // +0.48 -> 0.73 >= 0.65!
+  assert.equal(simEvade.trace.active, true);
+
+  // Disconnect and move > 9m away into public gala hall (8, 0) before trace reaches 1.0
+  disconnectLink(simEvade, 'manual');
+  simEvade.player.x = 8;
+  simEvade.player.z = 0; // 12.8m from origin (18, -8), public zone out of camera sightlines
+  advance(simEvade, 0.5);
+  assert.equal(simEvade.trace.active, false, 'Moving > 9m away must evade trace');
+  assert.ok(simEvade.trace.netHeat <= CYBER.heat.postTraceReset, 'Hysteresis must lower netHeat below threshold');
+  advance(simEvade, 1.0);
+  assert.equal(simEvade.trace.active, false, 'Trace must NOT re-trigger on subsequent ticks after evasion');
+  assert.equal(simEvade.stats.alerts, 0);
+  assert.equal(simEvade.stats.spotted, 0);
+
+  // 2. Trace reaching 1.0 triggers ALERT.SEARCH and dispatches nearest guard WITHOUT burning outfit
+  const simFull = createSim({ seed: 404 });
+  isolateNPCs(simFull, ['chief', 'guard_corr']);
+  const chief2 = simFull.npcs.find((n) => n.id === 'chief');
+  chief2.x = -3; chief2.z = -14.6; chief2.state = 'idle'; chief2.dwell = 999;
+  const guard = simFull.npcs.find((n) => n.id === 'guard_corr');
+  // Even if guard is already investigating a stale spot, trace completion must redirect them to trace origin
+  guard.x = 8; guard.z = -9; guard.state = 'investigate'; guard.goal = { x: 8, z: -9 }; guard.searchTimer = 20;
+
+  simFull.player.x = 18;
+  simFull.player.z = -8;
+  simFull.trace.netHeat = 0.80;
+  advance(simFull, 0.1);
+  assert.equal(simFull.trace.active, true);
+  // Move player away ONLY AFTER keeping them inside evadeRadius until trace completes
+  advance(simFull, 10.2);
+  assert.equal(simFull.trace.active, false);
+  assert.equal(simFull.alarm, ALERT.SEARCH);
+  assert.equal(guard.state, 'investigate', 'Nearest guard must be dispatched to investigate trace origin');
+  assert.equal(guard.goal.x, 18, 'Investigating guard goal must update to trace originX');
+  assert.equal(guard.goal.z, -8, 'Investigating guard goal must update to trace originZ');
+  assert.equal(!!simFull.player.burned[simFull.player.outfit], false, 'Trace completion must not burn S-7 outfit');
+
+  // 3. Neutralizing chief cancels an active trace immediately
+  const simKillChief = createSim({ seed: 505 });
+  isolateNPCs(simKillChief, ['chief']);
+  const chief3 = simKillChief.npcs.find((n) => n.id === 'chief');
+  chief3.state = 'idle'; chief3.dwell = 999;
+  simKillChief.trace.netHeat = 0.80;
+  advance(simKillChief, 0.2);
+  assert.equal(simKillChief.trace.active, true);
+  killNPC(simKillChief, chief3, 'garrote', true);
+  advance(simKillChief, 0.2);
+  assert.equal(simKillChief.trace.active, false, 'Neutralizing security chief must abort active trace');
+  assert.equal(simKillChief.alarm, ALERT.CALM);
+});

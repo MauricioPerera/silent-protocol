@@ -1,0 +1,64 @@
+name: Verify & Deploy to GitHub Pages
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  verify-and-stage:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Verify ES Module syntax
+        run: |
+          for f in server.mjs src/*.js src/render/*.js tests/*.mjs; do
+            node --check "$f"
+          done
+
+      - name: Run deterministic test suite
+        run: npm test
+
+      - name: Stage static web bundle
+        run: |
+          mkdir -p _site/src/render _site/vendor
+          cp index.html _site/index.html
+          touch _site/.nojekyll
+          cp src/*.js _site/src/
+          cp src/render/*.js _site/src/render/
+          cp vendor/three.module.js _site/vendor/three.module.js
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: verify-and-stage
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

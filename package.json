@@ -1,0 +1,11 @@
+{
+  "name": "silent-protocol",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "SILENT PROTOCOL (Unidad S-7) - 3D social stealth browser simulation",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test tests/sim.test.mjs tests/cyber_and_dag.test.mjs"
+  }
+}

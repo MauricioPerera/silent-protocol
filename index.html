@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SILENT PROTOCOL — Unidad S-7</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='10' fill='%2305070c'/%3E%3Cpolygon points='32,10 52,32 32,54 12,32' fill='none' stroke='%234fe3d0' stroke-width='4'/%3E%3Ccircle cx='32' cy='32' r='6' fill='%23ffd166'/%3E%3C/svg%3E">
+<style>
+  :root{
+    --cyan:#4fe3d0; --amber:#ffb347; --red:#ff4d5e; --gold:#ffd166; --green:#6ee7a0;
+    --bg:#05070c; --panel:rgba(8,14,20,.72); --line:rgba(79,227,208,.28);
+    --font:'SF Mono',ui-monospace,'Cascadia Mono','Segoe UI Mono',Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;overflow:hidden;background:var(--bg);color:#cfe3e6;font-family:var(--font);}
+  #app{position:fixed;inset:0}
+  canvas#scene{position:absolute;inset:0;width:100%;height:100%;display:block;cursor:crosshair}
+  #hud{position:absolute;inset:0;pointer-events:none;z-index:5}
+  .panel{background:var(--panel);border:1px solid var(--line);backdrop-filter:blur(6px);
+    box-shadow:0 0 24px rgba(0,0,0,.55), inset 0 0 22px rgba(79,227,208,.05);}
+  .corner{position:relative}
+  .corner::before,.corner::after{content:'';position:absolute;width:10px;height:10px;border:2px solid var(--cyan);opacity:.75}
+  .corner::before{left:-1px;top:-1px;border-right:0;border-bottom:0}
+  .corner::after{right:-1px;bottom:-1px;border-left:0;border-top:0}
+  h3{font-size:10px;letter-spacing:.22em;color:var(--cyan);opacity:.85;margin-bottom:6px;font-weight:600}
+
+  /* objetivos */
+  #missionPanel{position:absolute;left:16px;top:16px;width:290px;padding:12px 14px}
+  #objectives{list-style:none;font-size:11.5px;line-height:1.65}
+  #objectives li{display:flex;gap:8px;align-items:flex-start;color:#b9cdd2}
+  #objectives li i{width:9px;height:9px;border:1px solid var(--cyan);margin-top:5px;flex:0 0 auto;transform:rotate(45deg)}
+  #objectives li.done{color:var(--green);text-decoration:line-through;opacity:.75}
+  #objectives li.done i{background:var(--green);border-color:var(--green)}
+  #objectives li.opt{opacity:.6;font-size:10.5px}
+  #missionTitle{font-size:13px;letter-spacing:.16em;color:#e8f6f7;margin-bottom:2px}
+  #missionSub{font-size:9.5px;color:#7f97a0;letter-spacing:.1em;margin-bottom:10px}
+  #clock{float:right;color:var(--amber);font-size:11px}
+
+  /* alerta */
+  #alertBanner{position:absolute;left:50%;top:14px;transform:translateX(-50%);padding:7px 22px;font-size:11px;
+    letter-spacing:.2em;border:1px solid var(--line);background:var(--panel);white-space:nowrap}
+  #alertBanner.calm{color:var(--cyan);border-color:rgba(79,227,208,.35)}
+  #alertBanner.search{color:var(--amber);border-color:rgba(255,179,71,.6);animation:pulse 1.4s infinite}
+  #alertBanner.combat{color:#fff;background:rgba(120,20,32,.8);border-color:var(--red);animation:pulse .7s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.55}}
+
+  /* enlace remoto y rastreo */
+  #linkBanner{position:absolute;left:50%;top:48px;transform:translateX(-50%);display:none;align-items:center;gap:12px;
+    padding:5px 16px;font-size:10px;letter-spacing:.15em;border:1px solid var(--gold);background:rgba(16,22,28,.88);
+    color:var(--gold);white-space:nowrap}
+  #linkBanner .warnTag{color:#fff;background:rgba(150,24,38,.88);padding:1px 6px;border:1px solid var(--red);font-size:9px}
+  #traceBar{position:absolute;left:50%;top:48px;transform:translateX(-50%);width:290px;display:none;
+    padding:5px 10px;background:rgba(8,13,20,.88);border:1px solid rgba(255,179,71,.45)}
+  #traceBar.shifted{top:80px}
+  #traceBar.active{border-color:var(--red);background:rgba(48,10,18,.88)}
+  #traceBar .row{display:flex;justify-content:space-between;font-size:9px;letter-spacing:.14em;color:var(--amber);margin-bottom:3px}
+  #traceBar.active .row{color:var(--red);font-weight:700}
+  #traceBar .track{height:5px;background:rgba(255,255,255,.1)}
+  #traceFill{height:100%;width:0;background:var(--amber);transition:width .1s linear}
+  #traceBar.active #traceFill{background:var(--red)}
+
+  /* disfraz */
+  #disguisePanel{position:absolute;right:16px;top:16px;width:300px;padding:12px 14px}
+  #disguiseName{font-size:14px;color:#e8f6f7;letter-spacing:.06em}
+  #disguiseName.burned{color:var(--red)}
+  #disguiseHint{font-size:10px;color:#8ba3ab;line-height:1.5;margin:5px 0 8px}
+  #zoneNow{font-size:11px;letter-spacing:.1em}
+  #zoneNow.ok{color:var(--green)} #zoneNow.bad{color:var(--red)}
+  #zoneChips{display:flex;flex-wrap:wrap;gap:4px;margin-top:8px}
+  .chip{font-size:8.5px;padding:2px 6px;border:1px solid;letter-spacing:.06em;opacity:.75}
+  .chip.ok{color:var(--green);border-color:rgba(110,231,160,.4)}
+  .chip.no{color:var(--red);border-color:rgba(255,77,94,.35)}
+  .chip.here{opacity:1;background:rgba(255,255,255,.08);font-weight:700}
+
+  /* estado */
+  #statusPanel{position:absolute;left:16px;bottom:16px;width:290px;padding:12px 14px}
+  .meter{height:9px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);margin:4px 0 9px;position:relative}
+  .meter .fill{height:100%;transition:width .15s linear;background:var(--cyan)}
+  .meter .fill.ok{background:linear-gradient(90deg,#2f9e8f,var(--cyan))}
+  .meter .fill.warn{background:linear-gradient(90deg,#a8752a,var(--amber))}
+  .meter .fill.bad{background:linear-gradient(90deg,#8f2531,var(--red))}
+  .meter.inst .fill{background:linear-gradient(90deg,#2b6f8f,#9fe8ff)}
+  .meterRow{display:flex;justify-content:space-between;font-size:9.5px;letter-spacing:.14em;color:#8ba3ab}
+  #miniStats{font-size:9.5px;color:#7f97a0;letter-spacing:.08em;margin-top:6px}
+  #miniStats b{color:var(--cyan)}
+
+  /* registro */
+  #log{position:absolute;left:16px;bottom:150px;width:340px;display:flex;flex-direction:column;gap:5px}
+  .toast{font-size:11px;padding:7px 10px;background:rgba(6,11,16,.85);border-left:3px solid var(--cyan);
+    color:#c8dde1;animation:slide .25s ease-out;line-height:1.4}
+  .toast.good{border-color:var(--green);color:#d6ffe6}
+  .toast.bad{border-color:var(--red);color:#ffd9dd}
+  .toast.warn{border-color:var(--amber);color:#ffe8c9}
+  .toast.alarm{border-color:var(--red);background:rgba(90,14,24,.9);color:#fff;font-weight:700}
+  @keyframes slide{from{opacity:0;transform:translateX(-14px)}to{opacity:1;transform:none}}
+
+  /* hotbar */
+  #hotbar{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);display:flex;gap:6px;pointer-events:auto}
+  .slot{width:86px;padding:7px 6px 6px;background:rgba(8,14,20,.8);border:1px solid rgba(255,255,255,.12);
+    text-align:center;cursor:pointer;position:relative;transition:.12s}
+  .slot:hover{border-color:var(--cyan)}
+  .slot.active{border-color:var(--cyan);background:rgba(20,50,55,.85);box-shadow:0 0 16px rgba(79,227,208,.25)}
+  .slot.illegal.active{border-color:var(--red);box-shadow:0 0 16px rgba(255,77,94,.3)}
+  .slot.drawn::after{content:'A LA VISTA';position:absolute;left:0;right:0;bottom:-13px;font-size:7px;color:var(--red);letter-spacing:.1em}
+  .slot .key{position:absolute;left:4px;top:3px;font-size:8px;color:#7f97a0}
+  .slot .ico{display:block;font-size:17px;line-height:1.2}
+  .slot .nm{display:block;font-size:7.5px;color:#9fb6bd;letter-spacing:.04em;margin-top:2px;height:18px}
+  .slot .ammo{position:absolute;right:4px;top:3px;font-size:9px;color:var(--amber)}
+
+  /* prompt */
+  #prompt{position:absolute;left:50%;bottom:118px;transform:translateX(-50%);display:none;align-items:center;gap:10px;
+    padding:8px 16px;background:rgba(6,11,16,.88);border:1px solid var(--line);font-size:12.5px;white-space:nowrap}
+  #promptKey{display:inline-block;min-width:22px;text-align:center;padding:2px 6px;background:var(--cyan);color:#04121a;font-weight:700;font-size:11px}
+  #extras{position:absolute;left:50%;bottom:92px;transform:translateX(-50%);display:flex;gap:14px;font-size:10.5px;color:#9fb6bd;white-space:nowrap}
+  #extras b{color:var(--amber)}
+  #channelBar{position:absolute;left:50%;bottom:158px;transform:translateX(-50%);width:240px;display:none}
+  #channelBar .track{height:6px;background:rgba(255,255,255,.1);border:1px solid var(--line)}
+  #channelFill{height:100%;width:0;background:var(--amber)}
+  #channelLabel{font-size:9.5px;letter-spacing:.14em;color:var(--amber);text-align:center;margin-bottom:4px}
+
+  /* mira y sospecha */
+  #crosshair{position:absolute;left:50%;top:50%;width:5px;height:5px;margin:-2.5px 0 0 -2.5px;border-radius:50%;
+    background:rgba(255,255,255,.5);box-shadow:0 0 6px rgba(0,0,0,.8)}
+  #crosshair.aim{width:22px;height:22px;margin:-11px 0 0 -11px;background:none;border:1px solid var(--red);border-radius:50%}
+  #crosshair.aim::before,#crosshair.aim::after{content:'';position:absolute;background:var(--red)}
+  #crosshair.aim::before{left:50%;top:-6px;width:1px;height:6px}
+  #crosshair.aim::after{left:50%;bottom:-6px;width:1px;height:6px}
+  #suspicionRing{position:absolute;left:50%;top:50%;width:120px;height:120px;margin:-60px 0 0 -60px;opacity:0;transition:opacity .2s}
+  #suspicionRing svg{transform:rotate(-90deg)}
+  #suspicionRing circle{fill:none;stroke-width:3;stroke:rgba(255,255,255,.12)}
+  #suspicionRing .val{stroke:var(--cyan);stroke-dasharray:339;stroke-dashoffset:calc(339 - 339 * var(--v,0));transition:stroke-dashoffset .1s}
+  #suspicionRing.mid .val{stroke:var(--amber)} #suspicionRing.full .val{stroke:var(--red)}
+  #suspicionRing .who{position:absolute;left:50%;top:-16px;transform:translateX(-50%);font-size:9px;color:var(--amber);white-space:nowrap;letter-spacing:.1em}
+
+  /* marcadores */
+  #markers{position:absolute;inset:0;overflow:hidden}
+  .marker{position:absolute;left:0;top:0;text-align:center;will-change:transform}
+  .marker .bar{width:52px;height:4px;background:rgba(0,0,0,.6);border:1px solid rgba(255,255,255,.25);margin:0 auto 3px}
+  .marker .bar i{display:block;height:100%;width:0;background:var(--cyan)}
+  .marker.warn .bar i{background:var(--amber)} .marker.combat .bar i{background:var(--red)}
+  .marker .name{font-size:9.5px;color:#cfe3e6;text-shadow:0 1px 3px #000;letter-spacing:.05em;white-space:nowrap}
+  .marker.target .name{color:var(--gold);font-weight:700}
+  .marker.combat .name{color:var(--red)}
+  .marker.body .name{color:#e0a8b4}
+  .marker.instinct .name{opacity:1!important}
+
+  /* minimapa */
+  #mapPanel{position:absolute;right:16px;bottom:16px;padding:8px}
+  #minimap{display:block;width:200px;height:231px;image-rendering:pixelated}
+  #mapLegend{font-size:8px;color:#7f97a0;letter-spacing:.06em;margin-top:5px;display:flex;justify-content:space-between}
+
+  /* overlays */
+  .overlay{position:absolute;inset:0;z-index:20;display:none;align-items:center;justify-content:center;
+    background:radial-gradient(ellipse at center,rgba(6,12,18,.86),rgba(2,4,7,.97));pointer-events:auto;backdrop-filter:blur(3px)}
+  .overlay.show{display:flex}
+  .sheet{width:min(940px,94vw);max-height:92vh;overflow:auto;padding:30px 34px;background:rgba(7,12,18,.92);
+    border:1px solid var(--line);box-shadow:0 0 60px rgba(0,0,0,.7)}
+  .title{font-size:38px;letter-spacing:.3em;color:#e9fbfb;font-weight:700}
+  .title span{color:var(--cyan)}
+  .subtitle{font-size:11px;letter-spacing:.28em;color:var(--amber);margin:6px 0 18px}
+  .brief{font-size:12.5px;line-height:1.75;color:#a9c2c8;max-width:760px}
+  .brief b{color:var(--cyan)}
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:26px;margin-top:20px}
+  .keys{display:grid;grid-template-columns:auto 1fr;gap:5px 12px;font-size:11px;color:#a9c2c8}
+  .keys b{color:#04121a;background:var(--cyan);padding:1px 7px;font-size:10px;text-align:center;white-space:nowrap}
+  .keys b.alt{background:var(--amber)}
+  .btn{margin-top:24px;padding:13px 34px;background:var(--cyan);color:#04121a;border:0;font-family:var(--font);
+    font-size:13px;letter-spacing:.24em;font-weight:700;cursor:pointer;transition:.15s}
+  .btn:hover{background:#7ff2e2;box-shadow:0 0 26px rgba(79,227,208,.5)}
+  .btn.ghost{background:transparent;color:var(--cyan);border:1px solid var(--line);margin-left:10px}
+  .btn.ghost:hover{background:rgba(79,227,208,.12);box-shadow:none}
+  .targets{display:flex;gap:14px;margin-top:16px;flex-wrap:wrap}
+  .tcard{flex:1;min-width:220px;padding:12px 14px;border:1px solid rgba(255,209,102,.35);background:rgba(40,32,10,.35)}
+  .tcard h4{font-size:12.5px;color:var(--gold);letter-spacing:.1em;margin-bottom:4px}
+  .tcard p{font-size:10.5px;color:#a9c2c8;line-height:1.6}
+  .opts{display:flex;gap:18px;align-items:center;margin-top:18px;font-size:11px;color:#8ba3ab;flex-wrap:wrap}
+  select,input[type=range]{background:#0d1620;color:#cfe3e6;border:1px solid var(--line);font-family:var(--font);padding:4px 8px;font-size:11px}
+  #endStats{display:grid;grid-template-columns:1fr 1fr;gap:6px 26px;margin-top:18px;font-size:11.5px}
+  #endStats div{display:flex;justify-content:space-between;border-bottom:1px dashed rgba(255,255,255,.08);padding:4px 0}
+  #endStats b{color:var(--cyan)}
+  #endTitle.win{color:var(--green)} #endTitle.lose{color:var(--red)}
+  #endRating{font-size:26px;letter-spacing:.22em;color:var(--gold);margin-top:14px}
+  #endNote{font-size:12px;color:#a9c2c8;margin-top:6px;line-height:1.6}
+  .scoreRow{margin-top:14px;font-size:12px;color:#8ba3ab;letter-spacing:.16em}
+  .scoreRow b{font-size:26px;color:var(--cyan);margin-left:10px}
+  #hint{position:absolute;left:50%;top:calc(50% + 42px);transform:translateX(-50%);font-size:10px;color:#7f97a0;letter-spacing:.14em}
+  #fps{position:absolute;right:16px;top:calc(50% - 6px);font-size:9px;color:#4a5f68;letter-spacing:.1em}
+  #vignette{position:absolute;inset:0;pointer-events:none;z-index:4;
+    background:radial-gradient(ellipse at center,transparent 52%,rgba(0,0,0,.55) 100%)}
+  #scan{position:absolute;inset:0;pointer-events:none;z-index:4;opacity:.16;
+    background:repeating-linear-gradient(0deg,rgba(255,255,255,.05) 0 1px,transparent 1px 3px)}
+  #instinctTint{position:absolute;inset:0;pointer-events:none;z-index:3;opacity:0;transition:opacity .25s;
+    background:radial-gradient(ellipse at center,rgba(79,227,208,.10),rgba(20,60,80,.28));mix-blend-mode:screen}
+  #instinctTint.on{opacity:1}
+  #damage{position:absolute;inset:0;pointer-events:none;z-index:6;opacity:0;transition:opacity .3s;
+    box-shadow:inset 0 0 140px rgba(255,40,60,.75)}
+  @media (max-width:1100px){
+    #missionPanel,#statusPanel{width:240px} #disguisePanel{width:250px} #log{width:280px}
+    .slot{width:72px} #minimap{width:160px;height:185px}
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <canvas id="scene"></canvas>
+  <div id="instinctTint"></div>
+  <div id="vignette"></div>
+  <div id="scan"></div>
+  <div id="damage"></div>
+
+  <div id="hud">
+    <div id="missionPanel" class="panel corner">
+      <h3>CONTRATO 47-B · MANSIÓN AURORA <span id="clock">00:00</span></h3>
+      <div id="missionTitle">PROTOCOLO SILENTE</div>
+      <div id="missionSub">UNIDAD ANDROIDE S-7 · INFILTRACIÓN</div>
+      <ul id="objectives"></ul>
+    </div>
+
+    <div id="alertBanner" class="banner calm"><span id="alertText">SIN ALERTAS</span></div>
+    <div id="linkBanner"><span id="linkText">ENLACE ACTIVO</span><span id="linkWarn" class="warnTag" style="display:none">ZONA RESTRINGIDA</span></div>
+    <div id="traceBar"><div class="row"><span id="traceLabel">ACTIVIDAD DE RED</span><span id="tracePct">0%</span></div><div class="track"><div id="traceFill"></div></div></div>
+
+    <div id="disguisePanel" class="panel corner">
+      <h3>IDENTIDAD ACTUAL</h3>
+      <div id="disguiseName">Traje de gala</div>
+      <div id="disguiseHint"></div>
+      <div>ZONA: <span id="zoneNow" class="ok">—</span></div>
+      <div id="zoneChips"></div>
+    </div>
+
+    <div id="statusPanel" class="panel corner">
+      <div class="meterRow"><span>INTEGRIDAD DEL CHASIS</span><span id="integrityTxt">100%</span></div>
+      <div class="meter"><div id="integrityBar" class="fill ok" style="width:100%"></div></div>
+      <div class="meterRow"><span>INSTINTO ANDROIDE (V)</span><span>ESCÁNER</span></div>
+      <div class="meter inst"><div id="instinctBar" class="fill" style="width:100%"></div></div>
+      <div id="miniStats"></div>
+    </div>
+
+    <div id="log"></div>
+    <div id="hotbar"></div>
+    <div id="channelBar"><div id="channelLabel"></div><div class="track"><div id="channelFill"></div></div></div>
+    <div id="prompt"><span id="promptKey">E</span><span id="promptText"></span></div>
+    <div id="extras"></div>
+
+    <div id="crosshair" class="crosshair"></div>
+    <div id="suspicionRing" class="suspicion">
+      <div class="who"></div>
+      <svg width="120" height="120"><circle cx="60" cy="60" r="54"></circle><circle class="val" cx="60" cy="60" r="54"></circle></svg>
+    </div>
+    <div id="hint">CLIC PARA CAPTURAR EL RATÓN · ESC PARA PAUSA</div>
+    <div id="fps"></div>
+    <div id="markers"></div>
+
+    <div id="mapPanel" class="panel corner">
+      <h3>MAPA TÁCTICO</h3>
+      <canvas id="minimap" width="260" height="300"></canvas>
+      <div id="mapLegend"><span style="color:#6ee7a0">■ ZONA PERMITIDA</span><span style="color:#ff4d5e">■ RESTRINGIDA</span></div>
+    </div>
+  </div>
+
+  <!-- PANTALLA DE INICIO -->
+  <div id="startScreen" class="overlay show">
+    <div class="sheet corner">
+      <div class="title">SILENT <span>PROTOCOL</span></div>
+      <div class="subtitle">UNIDAD ANDROIDE S-7 · CONTRATO 47-B · MANSIÓN AURORA</div>
+      <p class="brief">
+        Eres <b>S-7</b>, un androide de infiltración. Aurora Dynamics celebra esta noche una gala privada en su mansión
+        mientras ultima un arma autónoma ilegal. Tu contrato: <b>eliminar a dos objetivos</b>, <b>robar el núcleo de datos</b>
+        y <b>extraer sin dejar rastro</b>.<br><br>
+        Nadie debe verte hacer nada indebido. <b>Cada disfraz abre unas puertas y cierra otras</b>: un cocinero entra en la
+        cocina pero es sospechoso en el laboratorio; un guardia puede llevar pistola a la vista, pero el jefe de seguridad
+        reconoce a los impostores. Somete o elimina a quien necesites, <b>arrastra los cuerpos</b> y escóndelos en neveras,
+        taquillas y cápsulas criogénicas antes de que alguien los encuentre… o de que despierten.
+      </p>
+      <div class="targets">
+        <div class="tcard"><h4>◆ MARCUS VANDERMEER — CEO</h4><p>Alterna entre el atril del salón, la barra, su despacho privado (donde bebe vino) y la terraza. Veneno en su copa, lámpara saboteada o cable de fibra.</p></div>
+        <div class="tcard"><h4>◆ DRA. ELENA KESSLER — DIRECTORA</h4><p>Trabaja en el laboratorio, toma café junto a la cafetera, visita el almacén y cruza el charco del ala este. Café envenenado o cuadro eléctrico saboteado.</p></div>
+      </div>
+      <div class="cols">
+        <div>
+          <h3>CONTROLES</h3>
+          <div class="keys">
+            <b>W A S D</b><span>Moverse (relativo a la cámara)</span>
+            <b>RATÓN</b><span>Cámara · clic para capturar el puntero</span>
+            <b>← →</b><span>Girar cámara (alternativa al ratón)</span>
+            <b>MAYÚS</b><span>Correr (hace ruido)</span>
+            <b>CTRL / C</b><span>Agacharse (sigiloso, menos visión)</span>
+            <b>E</b><span>Acción contextual / Hackear nodo en Escáner</span>
+            <b>F</b><span>Tomar disfraz / Puente a cámara o bot</span>
+            <b>Q</b><span>Acción secundaria / Desconectar enlace</span>
+            <b>A / D</b><span>Cambiar cámara activa en red CCTV</span>
+            <b class="alt">CLIC IZQ</b><span>Usar objeto: disparar, trampa, moneda</span>
+            <b class="alt">CLIC DER</b><span>Apuntar sobre el hombro</span>
+          </div>
+        </div>
+        <div>
+          <h3>SISTEMAS</h3>
+          <div class="keys">
+            <b>1 – 6</b><span>Manos · Pistola · Cable · Veneno · Trampa · Moneda</span>
+            <b>X</b><span>Guardar / empuñar (oculto = legal)</span>
+            <b>R</b><span>Recargar pistola</span>
+            <b>V</b><span>Instinto androide: ver a través de paredes</span>
+            <b>TAB</b><span>Fijar instinto</span>
+            <b>H / ESC</b><span>Pausa, ayuda y opciones</span>
+            <b>M</b><span>Silenciar audio</span>
+          </div>
+          <p class="brief" style="margin-top:14px;font-size:11px">
+            <b>Sospecha:</b> el anillo central se llena si alguien te ve donde no debes, con un arma ilegal,
+            arrastrando un cuerpo o si un <b>◉ ejecutor</b> reconoce tu disfraz. Al llenarse, salta la alarma.
+          </p>
+        </div>
+      </div>
+      <div class="opts">
+        <label>CALIDAD <select id="qualitySel"><option value="high">Alta</option><option value="medium">Media</option><option value="low">Baja</option></select></label>
+        <label>SENSIBILIDAD <input id="sensSel" type="range" min="0.5" max="3" step="0.1" value="1.4"></label>
+        <span>Recomendado: auriculares y pantalla completa.</span>
+      </div>
+      <button id="startBtn" class="btn">INICIAR MISIÓN</button>
+    </div>
+  </div>
+
+  <!-- PAUSA -->
+  <div id="pauseScreen" class="overlay">
+    <div class="sheet corner">
+      <div class="title" style="font-size:26px">PAUSA <span>TÁCTICA</span></div>
+      <div class="subtitle">LA MISIÓN CONTINÚA AL REANUDAR</div>
+      <div class="cols">
+        <div>
+          <h3>CONTROLES</h3>
+          <div class="keys">
+            <b>W A S D</b><span>Moverse</span><b>MAYÚS</b><span>Correr (ruidoso)</span>
+            <b>CTRL / C</b><span>Agacharse</span><b>E</b><span>Acción / Hack</span>
+            <b>F</b><span>Disfraz / Puente CCTV o Bot</span><b>Q</b><span>Secundaria / Desconectar</span>
+            <b>A / D</b><span>Saltar cámara en CCTV</span><b>X</b><span>Guardar / empuñar</span>
+            <b>1-6</b><span>Objetos</span><b>V / TAB</b><span>Escáner / Instinto</span>
+            <b>R</b><span>Recargar</span>
+            <b>CLIC IZQ</b><span>Usar objeto</span><b>CLIC DER</b><span>Apuntar</span>
+          </div>
+        </div>
+        <div>
+          <h3>RECORDATORIOS DE INFILTRACIÓN</h3>
+          <p class="brief" style="font-size:11.5px">
+            · Los cuerpos <b>despiertan</b> si los sometes y no los ocultas.<br>
+            · Un cuerpo encontrado dispara la búsqueda; dos, la alerta de combate.<br>
+            · Las muertes por <b>veneno, lámpara o electricidad</b> cuentan como accidente.<br>
+            · Los <b>◉ ejecutores</b> (jefe de cocina, jefe de seguridad, Dra. Novak) detectan disfraces robados.<br>
+            · Desactiva las <b>cámaras</b> desde la consola de seguridad.<br>
+            · La <b>moneda</b> atrae a los NPC al punto de impacto.
+          </p>
+          <div class="opts">
+            <label>CALIDAD <select id="qualitySel2"><option value="high">Alta</option><option value="medium">Media</option><option value="low">Baja</option></select></label>
+            <label>SENS. <input id="sensSel2" type="range" min="0.5" max="3" step="0.1" value="1.4"></label>
+          </div>
+        </div>
+      </div>
+      <button id="resumeBtn" class="btn">REANUDAR</button>
+      <button id="restartBtn" class="btn ghost">REINICIAR MISIÓN</button>
+    </div>
+  </div>
+
+  <!-- FINAL -->
+  <div id="endScreen" class="overlay">
+    <div class="sheet corner">
+      <div id="endTitle" class="title win" style="font-size:30px">MISIÓN COMPLETADA</div>
+      <div class="subtitle">INFORME DE LA AGENCIA</div>
+      <div id="endRating">ASESINO SILENCIOSO</div>
+      <div id="endNote"></div>
+      <div class="scoreRow">PUNTUACIÓN <b id="endScore">0</b></div>
+      <div id="endStats"></div>
+      <button id="againBtn" class="btn">NUEVA PARTIDA</button>
+    </div>
+  </div>
+</div>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
