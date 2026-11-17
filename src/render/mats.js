@@ -17,6 +17,80 @@ function targetSizeForQuality(quality) {
 
 export const SKY_U_OFFSET = 0.106; // Alinea el claro lunar (u=0.5) con moon.position (-28, 40, 22)
 
+export const ART_UVS = {
+  carpet:    { u0: 16 / 1024, u1: 496 / 1024, v0: 528 / 1024, v1: 1008 / 1024 },
+  maritime:  { u0: 528 / 1024, u1: 1008 / 1024, v0: 528 / 1024, v1: 1008 / 1024 },
+  portrait:  { u0: 16 / 1024, u1: 496 / 1024, v0: 16 / 1024, v1: 496 / 1024 },
+  blueprint: { u0: 528 / 1024, u1: 1008 / 1024, v0: 16 / 1024, v1: 496 / 1024 },
+};
+
+function drawGutteredTile(ctx, source, qx, qy, tintOverlay = null) {
+  const pad = 16;
+  const inner = 480;
+  const sw = source.naturalWidth || source.width;
+  const sh = source.naturalHeight || source.height;
+  if (!sw || !sh) return;
+  const x0 = qx + pad;
+  const y0 = qy + pad;
+  ctx.drawImage(source, 0, 0, sw, sh, x0, y0, inner, inner);
+  if (tintOverlay) {
+    ctx.fillStyle = tintOverlay;
+    ctx.fillRect(x0, y0, inner, inner);
+  }
+  // Extruye bordes hacia el margen de 16 px para impedir sangrado entre cuadrantes en mipmaps
+  ctx.drawImage(ctx.canvas, x0, y0, inner, 1, x0, qy, inner, pad);
+  ctx.drawImage(ctx.canvas, x0, y0 + inner - 1, inner, 1, x0, y0 + inner, inner, pad);
+  ctx.drawImage(ctx.canvas, x0, qy, 1, 512, qx, qy, pad, 512);
+  ctx.drawImage(ctx.canvas, x0 + inner - 1, qy, 1, 512, x0 + inner, qy, pad, 512);
+}
+
+function drawAuroraBlueprintTile(ctx, qx, qy) {
+  ctx.save();
+  ctx.fillStyle = '#071622';
+  ctx.fillRect(qx, qy, 512, 512);
+  const x0 = qx + 16, y0 = qy + 16, s = 480;
+  ctx.strokeStyle = 'rgba(79,227,208,0.13)';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 16; i++) {
+    const p = Math.round((i / 16) * s);
+    ctx.beginPath(); ctx.moveTo(x0 + p, y0); ctx.lineTo(x0 + p, y0 + s); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x0, y0 + p); ctx.lineTo(x0 + s, y0 + p); ctx.stroke();
+  }
+  ctx.strokeStyle = '#4fe3d0';
+  ctx.lineWidth = 2.2;
+  ctx.strokeRect(x0 + 14, y0 + 14, s - 28, s - 28);
+  // Esquemático técnico Proyecto Aurora (nodo neural + dron cuadrúpedo)
+  const cx = x0 + s * 0.5, cy = y0 + s * 0.52;
+  for (const r of [145, 108, 62]) {
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.strokeStyle = r === 108 ? 'rgba(255,209,102,0.65)' : 'rgba(79,227,208,0.65)';
+    ctx.stroke();
+  }
+  ctx.strokeStyle = '#7ff2e2';
+  ctx.lineWidth = 2.6;
+  ctx.beginPath();
+  ctx.moveTo(cx - 88, cy - 18); ctx.lineTo(cx + 88, cy - 18);
+  ctx.lineTo(cx + 112, cy + 16); ctx.lineTo(cx - 112, cy + 16); ctx.closePath();
+  ctx.stroke();
+  for (const sx of [-1, 1]) {
+    ctx.beginPath();
+    ctx.moveTo(cx + sx * 72, cy + 16);
+    ctx.lineTo(cx + sx * 108, cy + 74);
+    ctx.lineTo(cx + sx * 88, cy + 132);
+    ctx.stroke();
+  }
+  ctx.fillStyle = '#4fe3d0';
+  ctx.font = 'bold 17px monospace';
+  ctx.fillText('PROYECTO AURORA // NÚCLEO NEURAL S-7', x0 + 30, y0 + 46);
+  ctx.font = '12px monospace';
+  ctx.fillStyle = '#9fd8e2';
+  ctx.fillText('TELEMETRÍA RF · BUS ÓPTICO · CHASIS MK-IV', x0 + 30, y0 + 68);
+  ctx.fillStyle = '#ffd166';
+  ctx.fillText('CLASIFICACIÓN NIVEL 5 · DRA. E. KESSLER', x0 + 30, y0 + s - 28);
+  ctx.restore();
+}
+
 function makeSeamlessPanoCanvas(img) {
   const outW = 2048;
   const outH = 1024;
@@ -343,6 +417,56 @@ export function createMaterialLibrary(renderer, quality = 'high') {
     panoImg.src = new URL('../../assets/sky/aurora_night_pano.jpg', import.meta.url).href;
   }
 
+  // Atlas 2x2 con margen anti-sangrado para alfombra persa, óleos de gala y planos de laboratorio
+  let artTex;
+  let artCanvas = null;
+  if (typeof document !== 'undefined') {
+    artCanvas = document.createElement('canvas');
+    artCanvas.width = 1024;
+    artCanvas.height = 1024;
+    const ag = artCanvas.getContext('2d');
+    ag.fillStyle = '#4c1b29'; ag.fillRect(0, 0, 512, 512);
+    ag.strokeStyle = '#d8b45c'; ag.lineWidth = 10; ag.strokeRect(36, 36, 440, 440);
+    ag.fillStyle = '#0d1b2c'; ag.fillRect(512, 0, 512, 512);
+    ag.fillStyle = '#24151c'; ag.fillRect(0, 512, 512, 512);
+    drawAuroraBlueprintTile(ag, 512, 512);
+    artTex = new THREE.CanvasTexture(artCanvas);
+  } else {
+    artTex = new THREE.DataTexture(new Uint8Array([90, 34, 51, 255]), 1, 1, THREE.RGBAFormat);
+    artTex.needsUpdate = true;
+  }
+  artTex.colorSpace = THREE.SRGBColorSpace;
+  artTex.wrapS = THREE.ClampToEdgeWrapping;
+  artTex.wrapT = THREE.ClampToEdgeWrapping;
+  artTex.generateMipmaps = true;
+  artTex.minFilter = THREE.LinearMipmapLinearFilter;
+  artTex.magFilter = THREE.LinearFilter;
+  artTex.anisotropy = initAniso;
+  allTextures.push(artTex);
+
+  if (typeof Image !== 'undefined' && artCanvas) {
+    const artSpecs = [
+      { url: '../../assets/art/carpet_ballroom.jpg', qx: 0, qy: 0, tint: null },
+      { url: '../../assets/art/maritime_oil.jpg', qx: 512, qy: 0, tint: null },
+      { url: '../../assets/dossier/vandermeer.jpg', qx: 0, qy: 512, tint: 'rgba(42,24,8,0.14)' },
+    ];
+    for (const sp of artSpecs) {
+      const im = new Image();
+      im.decoding = 'async';
+      im.onload = () => {
+        if (disposed) return;
+        try {
+          const ag = artCanvas.getContext('2d');
+          drawGutteredTile(ag, im, sp.qx, sp.qy, sp.tint);
+          artTex.needsUpdate = true;
+        } catch (_err) {
+          // Conserva cuadrante procedural si falla la decodificación
+        }
+      };
+      im.src = new URL(sp.url, import.meta.url).href;
+    }
+  }
+
   const pbr = (setKey, opts = {}) => {
     const s = sets[setKey];
     const mat = new THREE.MeshStandardMaterial(Object.assign({
@@ -417,6 +541,16 @@ export function createMaterialLibrary(renderer, quality = 'high') {
     metalness: 0.82,
     envMapIntensity: 1.55,
   });
+  const artAtlas = new THREE.MeshStandardMaterial({
+    map: artTex,
+    aoMap: sets.fabric_suit.ormMap,
+    aoMapIntensity: 0.45,
+    normalMap: sets.fabric_suit.normalMap,
+    normalScale: new THREE.Vector2(0.26, 0.26),
+    roughness: 0.56,
+    metalness: 0.06,
+    envMapIntensity: 0.92,
+  });
 
   const glowCyan = new THREE.MeshBasicMaterial({ color: new THREE.Color(COLORS.cyan).multiplyScalar(1.6), toneMapped: false });
   const glowAmber = new THREE.MeshBasicMaterial({ color: new THREE.Color(COLORS.amber).multiplyScalar(1.5), toneMapped: false });
@@ -425,7 +559,7 @@ export function createMaterialLibrary(renderer, quality = 'high') {
   const glowGreen = new THREE.MeshBasicMaterial({ color: new THREE.Color(0x7dffb0).multiplyScalar(1.5), toneMapped: false });
   const glowWarm = new THREE.MeshBasicMaterial({ color: new THREE.Color(0xffdfa8).multiplyScalar(1.65), toneMapped: false });
 
-  allMaterials.push(wallXray, trimOpaque, trimXray, glass, water, ocean, glowCyan, glowAmber, glowRed, glowGold, glowGreen, glowWarm);
+  allMaterials.push(wallXray, trimOpaque, trimXray, glass, water, ocean, artAtlas, glowCyan, glowAmber, glowRed, glowGold, glowGreen, glowWarm);
   const sharedSet = new Set(allMaterials);
 
   function makeZoneFloorMaterial(zone) {
@@ -564,6 +698,9 @@ export function createMaterialLibrary(renderer, quality = 'high') {
     glass,
     water,
     ocean,
+    artAtlas,
+    artTex,
+    artUVs: ART_UVS,
     glowCyan,
     glowAmber,
     glowRed,

@@ -82,14 +82,31 @@ const COMPOSITE_FRAG = /* glsl */ `
   uniform sampler2D tScene;
   uniform sampler2D tBloom;
   uniform float bloomStrength;
+  uniform float uTime;
   varying vec2 vUv;
 
+  float filmHash(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+  }
+
   void main() {
-    vec3 base = texture2D(tScene, vUv).rgb;
+    vec2 centered = vUv - 0.5;
+    float r2 = dot(centered, centered);
+    // Micro-dispersión óptica sutil en bordes periféricos
+    vec2 caShift = centered * (r2 * 0.0045);
+    float rCh = texture2D(tScene, vUv + caShift).r;
+    float gCh = texture2D(tScene, vUv).g;
+    float bCh = texture2D(tScene, vUv - caShift).b;
+    vec3 base = vec3(rCh, gCh, bCh) * (1.0 - r2 * 0.22);
     vec3 bloom = texture2D(tBloom, vUv).rgb;
     gl_FragColor = vec4(base + bloom * bloomStrength, 1.0);
     #include <tonemapping_fragment>
     #include <colorspace_fragment>
+    float grain = (filmHash(gl_FragCoord.xy + fract(uTime) * 173.0) - 0.5) * 0.015;
+    float lum = dot(gl_FragColor.rgb, vec3(0.299, 0.587, 0.114));
+    gl_FragColor.rgb = clamp(gl_FragColor.rgb + grain * (1.0 - lum * 0.55), 0.0, 1.0);
   }
 `;
 
@@ -157,6 +174,7 @@ export function createPostFX(renderer, width = 1280, height = 720, quality = 'hi
       tScene: { value: null },
       tBloom: { value: null },
       bloomStrength: { value: 0.34 },
+      uTime: { value: 0 },
     },
   });
 
@@ -296,10 +314,11 @@ export function createPostFX(renderer, width = 1280, height = 720, quality = 'hi
         prevBloom = target;
       }
 
-      // 4. Composición final HDR -> AgXToneMapping + LinearToSRGB
+      // 4. Composición final HDR -> AgXToneMapping + LinearToSRGB + grano óptico
       quad.material = compMat;
       compMat.uniforms.tScene.value = sceneRT.texture;
       compMat.uniforms.tBloom.value = prevBloom.texture;
+      compMat.uniforms.uTime.value = (typeof performance !== 'undefined' ? performance.now() : 0) * 0.001;
       renderer.setRenderTarget(null);
       renderer.render(passScene, orthoCam);
     },

@@ -4,6 +4,18 @@
 import * as THREE from '../../vendor/three.module.js';
 import { COLORS } from '../config.js';
 
+export function remapPlaneUVs(geo, rect) {
+  const uv = geo.attributes.uv;
+  if (!uv || !rect) return geo;
+  const du = rect.u1 - rect.u0;
+  const dv = rect.v1 - rect.v0;
+  for (let i = 0; i < uv.count; i++) {
+    uv.setXY(i, rect.u0 + uv.getX(i) * du, rect.v0 + uv.getY(i) * dv);
+  }
+  uv.needsUpdate = true;
+  return geo;
+}
+
 export function scaleGeometryUVs(geo, uScale, vScale) {
   const uv = geo.attributes.uv;
   if (!uv) return geo;
@@ -274,13 +286,41 @@ export function buildPropMesh(p, matLib, refs = {}) {
 
   switch (p.kind) {
     case 'rug': {
-      const geo = scaleGeometryUVs(new THREE.PlaneGeometry(w, d), w / 3, d / 3);
-      const m = new THREE.Mesh(geo, M.fabric);
+      const rect = M.artUVs ? M.artUVs.carpet : null;
+      const geo = rect
+        ? remapPlaneUVs(new THREE.PlaneGeometry(w, d), rect)
+        : scaleGeometryUVs(new THREE.PlaneGeometry(w, d), w / 3, d / 3);
+      const m = new THREE.Mesh(geo, M.artAtlas || M.fabric);
       m.rotation.x = -Math.PI / 2;
       m.position.y = 0.012;
       m.castShadow = false;
       m.receiveShadow = true;
       g.add(m);
+      break;
+    }
+    case 'painting': {
+      const artKey = p.art || 'maritime';
+      const isLab = artKey === 'blueprint';
+      const frameMat = isLab ? M.darkMetal : M.gold;
+      const bThick = 0.065;
+      // Marco biselado perimetral sin sombra proyectada (fusionado estáticamente)
+      g.add(mBox(w + bThick * 2, bThick, 0.048, frameMat, 0, h * 0.5 + bThick * 0.5, 0, false));
+      g.add(mBox(w + bThick * 2, bThick, 0.048, frameMat, 0, -h * 0.5 - bThick * 0.5, 0, false));
+      g.add(mBox(bThick, h, 0.048, frameMat, -w * 0.5 - bThick * 0.5, 0, 0, false));
+      g.add(mBox(bThick, h, 0.048, frameMat, w * 0.5 + bThick * 0.5, 0, 0, false));
+
+      const rect = (M.artUVs && M.artUVs[artKey]) ? M.artUVs[artKey] : null;
+      const canvasGeo = remapPlaneUVs(new THREE.PlaneGeometry(w, h), rect);
+      const canvasMesh = new THREE.Mesh(canvasGeo, M.artAtlas || M.fabric);
+      canvasMesh.position.z = 0.024;
+      canvasMesh.castShadow = false;
+      canvasMesh.receiveShadow = true;
+      g.add(canvasMesh);
+
+      // Aplique superior de galería / museo
+      const lampW = Math.min(0.68, w * 0.42);
+      g.add(mBox(lampW, 0.032, 0.14, frameMat, 0, h * 0.5 + bThick + 0.08, 0.06, false));
+      g.add(mBox(lampW * 0.86, 0.016, 0.04, isLab ? M.glowCyan : M.glowWarm, 0, h * 0.5 + bThick + 0.062, 0.10, false));
       break;
     }
     case 'table': {

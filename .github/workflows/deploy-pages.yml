@@ -37,7 +37,7 @@ jobs:
 
       - name: Stage static web bundle
         run: |
-          mkdir -p _site/src/render _site/vendor _site/assets/sky
+          mkdir -p _site/src/render _site/vendor _site/assets/sky _site/assets/dossier _site/assets/art
           cp index.html _site/index.html
           cp THIRD_PARTY_NOTICES.md _site/THIRD_PARTY_NOTICES.md
           touch _site/.nojekyll
@@ -45,6 +45,8 @@ jobs:
           cp src/render/*.js _site/src/render/
           cp vendor/three.module.js _site/vendor/three.module.js
           cp assets/sky/* _site/assets/sky/
+          cp assets/dossier/* _site/assets/dossier/
+          cp assets/art/* _site/assets/art/
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5

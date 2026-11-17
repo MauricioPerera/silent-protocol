@@ -20,6 +20,7 @@ export class UI {
       markers: $('markers'), minimap: $('minimap'), progress: $('channelBar'),
       progressFill: $('channelFill'), progressLabel: $('channelLabel'), suspicion: $('suspicionRing'),
       crosshair: $('crosshair'), stats: $('miniStats'), clock: $('clock'),
+      tgtVandermeer: $('hudTgt-vandermeer'), tgtKessler: $('hudTgt-kessler'), s7Avatar: $('s7HudAvatar'),
     };
     this.mm = this.el.minimap.getContext('2d');
     this.markerPool = [];
@@ -74,16 +75,31 @@ export class UI {
       if (now - this.logItems[i].t > 9000) { this.logItems[i].el.remove(); this.logItems.splice(i, 1); }
     }
 
-    // Objetivos
+    // Objetivos y tarjetas de vigilancia de objetivos primarios
     for (const o of objectiveList(sim)) {
       const li = $('obj-' + o.id);
       if (li) li.className = (o.done ? 'done ' : '') + (o.optional ? 'opt' : '');
     }
+    const syncTargetCard = (cardEl, npcId) => {
+      if (!cardEl) return;
+      const npc = sim.npcs.find((n) => n.id === npcId);
+      const down = !!(npc && !npc.alive);
+      cardEl.classList.toggle('down', down);
+      const st = cardEl.querySelector('.st');
+      if (st) st.textContent = down ? 'ELIMINADO' : 'OBJETIVO';
+    };
+    syncTargetCard(this.el.tgtVandermeer, 'vandermeer');
+    syncTargetCard(this.el.tgtKessler, 'kessler');
 
     // Disfraz y zona del chasis S-7
     const outfit = OUTFITS[p.outfit];
-    this.el.disguise.textContent = outfit.name + (p.burned[p.outfit] ? ' ⚠ QUEMADO' : '');
-    this.el.disguise.className = p.burned[p.outfit] ? 'burned' : '';
+    const isBurned = !!p.burned[p.outfit];
+    this.el.disguise.textContent = outfit.name + (isBurned ? ' ⚠ QUEMADO' : '');
+    this.el.disguise.className = isBurned ? 'burned' : '';
+    if (this.el.s7Avatar) {
+      this.el.s7Avatar.classList.toggle('burned', isBurned);
+      this.el.s7Avatar.classList.toggle('linked', remoteActive);
+    }
     this.el.disguiseHint.textContent = outfit.hint;
     const zone = zoneAt(p.x, p.z);
     const zdef = ZONES.find((z) => z.id === zone);

@@ -122,6 +122,7 @@ export class View {
       this.buildInteractables();
       this.buildCameras();
       this.buildCharactersAndUnits();
+      this.buildContactShadows();
       this.buildFxPool();
       this.resize();
       this.precompileShaders();
@@ -394,6 +395,25 @@ export class View {
       this.scene.add(pg);
       staticRoots.push(pg);
     }
+
+    // Obras de arte y planos técnicos enmarcados sobre muros sólidos verificados (cero impacto en sim.boxes)
+    const wallArtworks = [
+      { kind: 'painting', art: 'portrait',  x: 0.0,    y: 1.92, z: -5.77,  w: 2.05, h: 2.05, rot: 0 },
+      { kind: 'painting', art: 'maritime',  x: 13.77,  y: 1.84, z: 3.80,   w: 2.65, h: 1.55, rot: -Math.PI / 2 },
+      { kind: 'painting', art: 'maritime',  x: 13.77,  y: 1.84, z: -3.80,  w: 2.40, h: 1.45, rot: -Math.PI / 2 },
+      { kind: 'painting', art: 'maritime',  x: -13.77, y: 1.84, z: -3.00,  w: 2.45, h: 1.45, rot: Math.PI / 2 },
+      { kind: 'painting', art: 'maritime',  x: 14.0,   y: 1.86, z: -17.77, w: 2.80, h: 1.62, rot: 0 },
+      { kind: 'painting', art: 'portrait',  x: 16.6,   y: 1.78, z: -12.23, w: 1.45, h: 1.45, rot: Math.PI },
+      { kind: 'painting', art: 'maritime',  x: 4.8,    y: 1.80, z: -11.77, w: 2.20, h: 1.32, rot: 0 },
+      { kind: 'painting', art: 'blueprint', x: 21.77,  y: 1.88, z: -1.20,  w: 2.20, h: 1.55, rot: -Math.PI / 2 },
+      { kind: 'painting', art: 'blueprint', x: 21.77,  y: 1.88, z: 7.40,   w: 2.20, h: 1.55, rot: -Math.PI / 2 },
+    ];
+    for (const wa of wallArtworks) {
+      const wg = buildPropMesh(wa, this.matLib, this.propRefs);
+      this.scene.add(wg);
+      staticRoots.push(wg);
+    }
+
     this.chandelier = this.propRefs.chandelier || null;
     this.boat = this.propRefs.boat || null;
     this.puddles = { lab: this.propRefs.puddleLab || null };
@@ -508,6 +528,113 @@ export class View {
       this.scene.add(br.group);
       this.unitRigs.set(u.id, br);
     }
+  }
+
+  buildContactShadows() {
+    const sz = 64;
+    const buf = new Uint8Array(sz * sz * 4);
+    for (let y = 0; y < sz; y++) {
+      const dy = (y + 0.5) / sz * 2 - 1;
+      for (let x = 0; x < sz; x++) {
+        const dx = (x + 0.5) / sz * 2 - 1;
+        const r2 = Math.min(1, dx * dx + dy * dy);
+        const a = Math.pow(1 - r2, 2.25);
+        const o = (y * sz + x) * 4;
+        buf[o] = 2;
+        buf[o + 1] = 4;
+        buf[o + 2] = 8;
+        buf[o + 3] = Math.round(a * 255);
+      }
+    }
+    const shadowTex = new THREE.DataTexture(buf, sz, sz, THREE.RGBAFormat);
+    shadowTex.needsUpdate = true;
+    this.ownedTextures.push(shadowTex);
+
+    const shadowGeo = new THREE.PlaneGeometry(1, 1);
+    shadowGeo.rotateX(-Math.PI / 2);
+    this.ownedGeos.push(shadowGeo);
+
+    const shadowMat = new THREE.MeshBasicMaterial({
+      map: shadowTex,
+      transparent: true,
+      opacity: 0.52,
+      depthWrite: false,
+    });
+    this.ownedMats.push(shadowMat);
+
+    const groundedKinds = new Set([
+      'table', 'chair', 'podium', 'buffet', 'plant', 'piano', 'sofa',
+      'pod', 'cryo', 'terminal', 'crate', 'toolbox', 'fountain', 'lounge', 'statue',
+    ]);
+    const staticProps = PROPS.filter((pr) => groundedKinds.has(pr.kind));
+    this.dynShadowSlots = 1 + this.sim.npcs.length + (this.sim.units ? this.sim.units.length : 0);
+    const total = this.dynShadowSlots + staticProps.length;
+
+    const inst = new THREE.InstancedMesh(shadowGeo, shadowMat, total);
+    inst.frustumCulled = false;
+    inst.renderOrder = 2;
+
+    this._shadowDummy = new THREE.Matrix4();
+    this._shadowPos = new THREE.Vector3();
+    this._shadowQuat = new THREE.Quaternion();
+    this._shadowScale = new THREE.Vector3();
+    this._yAxis = new THREE.Vector3(0, 1, 0);
+
+    staticProps.forEach((pr, idx) => {
+      const slot = this.dynShadowSlots + idx;
+      const sx = (pr.w || (pr.r ? pr.r * 2 : 1)) * 1.24;
+      const szp = (pr.d || (pr.r ? pr.r * 2 : 1)) * 1.24;
+      this._shadowPos.set(pr.x, 0.024, pr.z);
+      this._shadowQuat.setFromAxisAngle(this._yAxis, pr.rot || 0);
+      this._shadowScale.set(sx, 1, szp);
+      this._shadowDummy.compose(this._shadowPos, this._shadowQuat, this._shadowScale);
+      inst.setMatrixAt(slot, this._shadowDummy);
+    });
+    inst.instanceMatrix.needsUpdate = true;
+    this.contactShadows = inst;
+    this.scene.add(inst);
+  }
+
+  updateContactShadows(sim) {
+    const inst = this.contactShadows;
+    if (!inst) return;
+    const shadowY = (x, z) => (Math.abs(x) <= 2.05 && z >= 22.45 ? 0.156 : 0.025);
+    const setSlot = (slot, x, z, yaw, sx, sz) => {
+      this._shadowPos.set(x, shadowY(x, z), z);
+      this._shadowQuat.setFromAxisAngle(this._yAxis, yaw);
+      this._shadowScale.set(sx, 1, sz);
+      this._shadowDummy.compose(this._shadowPos, this._shadowQuat, this._shadowScale);
+      inst.setMatrixAt(slot, this._shadowDummy);
+    };
+
+    const p = sim.player;
+    const ps = p.crouch ? 0.92 : 1.06;
+    setSlot(0, p.x, p.z, p.yaw, ps, ps);
+
+    const bodyMap = new Map();
+    for (const b of sim.bodies) {
+      if (!b.hidden) bodyMap.set(b.npcId, b);
+    }
+
+    for (let i = 0; i < sim.npcs.length; i++) {
+      const n = sim.npcs[i];
+      const slot = 1 + i;
+      if (n.alive && n.conscious) {
+        setSlot(slot, n.x, n.z, n.yaw, 1.02, 1.02);
+      } else {
+        const b = bodyMap.get(n.id);
+        if (b) setSlot(slot, b.x, b.z, b.yaw, 0.94, 1.82);
+        else setSlot(slot, 0, -50, 0, 0, 0);
+      }
+    }
+
+    const baseUnit = 1 + sim.npcs.length;
+    const units = sim.units || [];
+    for (let i = 0; i < units.length; i++) {
+      const u = units[i];
+      setSlot(baseUnit + i, u.x, u.z, u.yaw, 0.96, 1.18);
+    }
+    inst.instanceMatrix.needsUpdate = true;
   }
 
   buildFxPool() {
@@ -967,6 +1094,7 @@ export class View {
       if (c) { m.position.set(c.x, c.y, c.z); m.rotation.x = c.landed ? Math.PI / 2 : t * 12; }
     });
 
+    this.updateContactShadows(sim);
     this.updateFx(sim, t);
     this.updateCamera(dt, input);
     this.updateSky(dt);
@@ -1053,6 +1181,7 @@ export class View {
     }
     for (const o of this.fxObjects) this.disposeFxEntry(o);
     if (this.staticBatch) this.staticBatch.dispose();
+    if (this.contactShadows) this.contactShadows.dispose();
     if (this.lightFixtures) {
       for (const lf of this.lightFixtures) lf.coneObj.dispose();
     }

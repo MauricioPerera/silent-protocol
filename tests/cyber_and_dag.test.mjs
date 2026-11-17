@@ -545,13 +545,33 @@ test('rigs.js enforces shadow-caster discipline, VIP/enforcer silhouettes, and c
   botSec.dispose();
 });
 
-test('nocturnal equirectangular skybox asset exists with valid JPEG magic bytes and SKY_U_OFFSET alignment', async () => {
-  const { SKY_U_OFFSET } = await import('../src/render/mats.js');
+test('nocturnal skybox, dossier portraits, and Mansion Aurora art assets exist with valid JPEG headers and atlas UVs', async () => {
+  const { SKY_U_OFFSET, ART_UVS } = await import('../src/render/mats.js');
+  const { remapPlaneUVs } = await import('../src/render/props.js');
+  const THREE = await import('../vendor/three.module.js');
+
   assert.ok(Math.abs(SKY_U_OFFSET - 0.106) < 1e-6);
-  const skyPath = resolve(ROOT, 'assets/sky/aurora_night_pano.jpg');
-  const buf = await readFile(skyPath);
-  assert.ok(buf.length > 100_000, `Expected skybox asset > 100 KB, got ${buf.length}`);
-  assert.equal(buf[0], 0xff);
-  assert.equal(buf[1], 0xd8);
-  assert.equal(buf[2], 0xff);
+  for (const k of ['carpet', 'maritime', 'portrait', 'blueprint']) {
+    const r = ART_UVS[k];
+    assert.ok(r && r.u0 >= 0 && r.u1 <= 1 && r.u1 > r.u0 && r.v0 >= 0 && r.v1 <= 1 && r.v1 > r.v0);
+  }
+  const pg = remapPlaneUVs(new THREE.PlaneGeometry(2, 1), ART_UVS.maritime);
+  assert.ok(Math.abs(pg.attributes.uv.getX(0) - ART_UVS.maritime.u0) < 1e-5);
+  pg.dispose();
+
+  const relAssets = [
+    'assets/sky/aurora_night_pano.jpg',
+    'assets/dossier/vandermeer.jpg',
+    'assets/dossier/kessler.jpg',
+    'assets/dossier/s7.jpg',
+    'assets/art/carpet_ballroom.jpg',
+    'assets/art/maritime_oil.jpg',
+  ];
+  for (const rel of relAssets) {
+    const buf = await readFile(resolve(ROOT, rel));
+    assert.ok(buf.length > 100_000, `Expected ${rel} > 100 KB, got ${buf.length}`);
+    assert.equal(buf[0], 0xff, `${rel} missing JPEG SOI`);
+    assert.equal(buf[1], 0xd8, `${rel} missing JPEG SOI`);
+    assert.equal(buf[2], 0xff, `${rel} missing JPEG marker`);
+  }
 });
